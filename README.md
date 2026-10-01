@@ -1,4 +1,8 @@
-# AI-Craftman
+<p align="center">
+  <img src="assets/logo.png" alt="AI-Craftman: a craftsman writing code at his workbench" width="240">
+</p>
+
+<h1 align="center">AI-Craftman</h1>
 
 An AI-SDLC plugin for Claude Code. One command takes a requirement through five stages. An orchestration layer runs the pipeline, 21 specialist agents do the work, every outcome is written to project memory, and approvals are **enforced by hooks**, not just requested in prompts.
 
