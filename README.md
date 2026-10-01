@@ -1,8 +1,25 @@
-<p align="center">
-  <img src="assets/logo.png" alt="AI-Craftman: a craftsman writing code at his workbench" width="240">
-</p>
+# AI-Craftman
 
-<h1 align="center">AI-Craftman</h1>
+```text
+  [##]   ||   /|                .-~~~~~~~-.
+   ||    ||   ||               /___________\___
+   ||    \/   ||               |  o     o  |
+   ||         ||               |     >     |
+                               \\|||||||||//         ____________________
+                                \\|||||||//         |  ________________  |
+                               ___\|||||/___        | | $ craft --fine | |
+                              /   |#####|   \       | |   measure()    | |
+                             / /  |#####|  \ \      | |   cut()        | |
+                            / /   |#####|   \ \     | |   ship()_      | |
+                           | |    |#####|    \ \    | |________________| |
+                           | |    |#####|     \__o  |____________________|
+ __________________________________________________/______________________\____
+ |                                                                            |
+ |____________________________________________________________________________|
+    ||                                                                    ||
+    ||                                                                    ||
+   _||_                                                                  _||_
+```
 
 An AI-SDLC plugin for Claude Code. One command takes a requirement through five stages. An orchestration layer runs the pipeline, 21 specialist agents do the work, every outcome is written to project memory, and approvals are **enforced by hooks**, not just requested in prompts.
 
