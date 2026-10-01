@@ -1,0 +1,163 @@
+#!/usr/bin/env bash
+# AI-Craftman run state. Plain text on purpose: readable by humans, greppable by hooks.
+# Files: .craftman/active-run, .craftman/memory/index.md, .craftman/memory/<run>/{state,approvals,answers,escalations}.md
+set -euo pipefail
+
+ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
+MEM="$ROOT/.craftman/memory"
+ACTIVE="$ROOT/.craftman/active-run"
+
+STAGES="requirements context architecture engineering qa devops"
+# step:stage:owner
+FULL_STEPS="requirements:requirements:requirements-planner
+clarifications:requirements:human-liaison
+gov-requirements:requirements:governance
+context:context:enterprise-context
+legacy-analysis:context:legacy-analyst
+context-memory:context:memory-keeper
+architecture:architecture:architect
+gov-architecture:architecture:governance
+approve-architecture:architecture:human-oversight
+work-plan:architecture:workflow-coordinator
+tracker-issues:architecture:orchestrator
+git-branch:engineering:orchestrator
+engineering:engineering:tdd-engineer,test-writer,code-writer,code-reviewer,code-optimizer
+security-review:engineering:security-reviewer
+qa:qa:qa-engineer
+docs:qa:doc-writer
+gov-release:qa:governance
+pull-request:qa:orchestrator
+delivery:devops:delivery-manager
+deploy-decisions:devops:human-liaison
+approve-deploy:devops:human-oversight
+devops:devops:devops-engineer
+operations:devops:operations-engineer
+summary:finish:memory-keeper"
+LITE_SKIP="gov-requirements approve-architecture work-plan tracker-issues security-review"
+
+die() { echo "craftman-state: $*" >&2; exit 1; }
+now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
+epoch() { date -u +%s; }
+dur() { local s=$1; [ "$s" -ge 3600 ] && printf '%dh%02dm' $((s/3600)) $((s%3600/60)) || printf '%dm%02ds' $((s/60)) $((s%60)); }
+# elapsed since the previous done/skip (or init); steps run in order, so this is the step's wall-clock time
+elapsed() { local last; last=$(get last_mark "$1"); [ -n "$last" ] && dur $(( $(epoch) - last )) || echo "?"; }
+run_id() { [ -n "${1:-}" ] && echo "$1" || { [ -f "$ACTIVE" ] && cat "$ACTIVE"; } || die "no active run; pass a run id"; }
+state_file() { local f="$MEM/$(run_id "${1:-}")/state.md"; [ -f "$f" ] || die "no state at $f"; echo "$f"; }
+get() { sed -n "s/^$1: //p" "$2" | head -1; }
+# replace "key: ..." line in place (portable: no sed -i; temp file beside target works inside the sandbox)
+put() { local tmp; tmp=$(mktemp "$3.XXXXXX"); awk -v k="$1" -v v="$2" 'BEGIN{d=0} index($0,k": ")==1 && !d {print k": "v; d=1; next} {print}' "$3" > "$tmp" && mv "$tmp" "$3"; }
+stage_index() { local i=0 s; for s in $STAGES; do [ "$s" = "$1" ] && { echo $i; return; }; i=$((i+1)); done; [ "$1" = finish ] && { echo 99; return; }; die "unknown stage: $1 (use: $STAGES)"; }
+mark() { # mark <state> <step> <char> <note>
+  local tmp; tmp=$(mktemp "$1.XXXXXX")
+  awk -v s="$2" -v c="$3" -v n="$4" '$0 ~ "^- \\[.\\] "s"( |$)" {print "- ["c"] "s"  "n; f=1; next} {print} END{exit !f}' "$1" > "$tmp" || { rm -f "$tmp"; die "unknown step: $2"; }
+  mv "$tmp" "$1"
+}
+
+cmd_init() {
+  local run="${1:-}"; shift || true
+  [ -n "$run" ] || die "usage: init <run-id> [--profile full|lite] [--from STAGE] [--to STAGE] [--skip-deploy] [--max-agent-calls N] [--requirement TEXT]"
+  local profile=full from=requirements to=devops skipdeploy=0 max=60 req=""
+  while [ $# -gt 0 ]; do
+    case "$1" in
+      --profile) profile="$2"; shift 2;;
+      --from) from="$2"; shift 2;;
+      --to) to="$2"; shift 2;;
+      --skip-deploy) skipdeploy=1; shift;;
+      --max-agent-calls) max="$2"; shift 2;;
+      --requirement) req="$2"; shift 2;;
+      *) die "unknown option $1";;
+    esac
+  done
+  case "$profile" in full|lite) ;; *) die "profile must be full or lite";; esac
+  case "$max" in ''|*[!0-9]*) max=60;; esac   # unsubstituted ${user_config...} falls back here
+  local fi ti; fi=$(stage_index "$from"); ti=$(stage_index "$to")
+  [ "$fi" -le "$ti" ] || die "--from is after --to"
+  local dir="$MEM/$run"
+  [ -f "$dir/state.md" ] && die "run $run already exists; use resume"
+  mkdir -p "$dir"
+  {
+    echo "run: $run"
+    echo "requirement: $req"
+    echo "profile: $profile"
+    echo "status: in_progress"
+    echo "started: $(now)"
+    echo "finished: "
+    echo "duration: "
+    echo "last_mark: $(epoch)"
+    echo "agent_calls: 0"
+    echo "max_agent_calls: $max"
+    echo "branch: "
+    echo "packages_done: "
+    echo
+    echo "## steps"
+    local line step stage si
+    while IFS= read -r line; do
+      step=${line%%:*}; stage=$(echo "$line" | cut -d: -f2); si=$(stage_index "$stage")
+      if [ "$si" -lt "$fi" ]; then echo "- [-] $step  (skipped: before --from $from)"
+      elif [ "$si" -gt "$ti" ] && [ "$stage" != finish ]; then echo "- [-] $step  (skipped: after --to $to)"
+      elif [ "$stage" = devops ] && [ "$skipdeploy" = 1 ]; then echo "- [-] $step  (skipped: --skip-deploy)"
+      elif [ "$profile" = lite ] && echo " $LITE_SKIP " | grep -q " $step "; then echo "- [-] $step  (skipped: lite profile)"
+      else echo "- [ ] $step"; fi
+    done <<< "$FULL_STEPS"
+  } > "$dir/state.md"
+  for f in approvals answers escalations; do [ -f "$dir/$f.md" ] || echo "# $f ($run)" > "$dir/$f.md"; done
+  mkdir -p "$MEM"; [ -f "$MEM/index.md" ] || echo "# AI-Craftman runs" > "$MEM/index.md"
+  echo "- $run | in_progress | $(now) | ${req:0:100}" >> "$MEM/index.md"
+  echo "$run" > "$ACTIVE"
+  echo "initialized $run ($profile, $from..$to$([ $skipdeploy = 1 ] && echo ', skip-deploy'))"
+  cmd_next "$run"
+}
+
+cmd_next() {
+  local f; f=$(state_file "${1:-}")
+  local step; step=$(sed -n 's/^- \[ \] \([a-z-]*\).*/\1/p' "$f" | head -1)
+  if [ -z "$step" ]; then echo "next: none (all steps done or skipped)"; return; fi
+  local line; line=$(echo "$FULL_STEPS" | grep "^$step:")
+  echo "next: $step  stage: $(echo "$line" | cut -d: -f2)  owner: $(echo "$line" | cut -d: -f3)"
+}
+
+cmd_done() { local f; f=$(state_file); mark "$f" "${1:?step}" x "(done $(now), took $(elapsed "$f")) ${2:-}"; put last_mark "$(epoch)" "$f"; cmd_next; }
+cmd_skip() { local f; f=$(state_file); mark "$f" "${1:?step}" - "(skipped: ${2:?reason})"; put last_mark "$(epoch)" "$f"; cmd_next; }
+cmd_set() {
+  local f; f=$(state_file); local k="${1:?key}" v="${2-}"
+  case "$k" in branch|packages_done) ;; *) die "settable keys: branch, packages_done";; esac
+  put "$k" "$v" "$f"; echo "$k: $v"
+}
+cmd_escalate() {
+  local r; r=$(run_id); echo "- $(now) ${1:?text}" >> "$MEM/$r/escalations.md"; echo "logged"
+}
+cmd_status() {
+  local f; f=$(state_file "${1:-}")
+  cat "$f"; echo; cmd_next "${1:-}"
+  local r; r=$(get run "$f"); grep '^granted:' "$MEM/$r/approvals.md" 2>/dev/null || true
+}
+cmd_list() { [ -f "$MEM/index.md" ] && cat "$MEM/index.md" || echo "no runs yet"; [ -f "$ACTIVE" ] && echo "active: $(cat "$ACTIVE")"; }
+cmd_resume() {
+  local r="${1:?run-id}"; [ -f "$MEM/$r/state.md" ] || die "no run $r"
+  echo "$r" > "$ACTIVE"; put status in_progress "$MEM/$r/state.md"; put last_mark "$(epoch)" "$MEM/$r/state.md"; cmd_status "$r"
+}
+cmd_finish() {
+  local f r; f=$(state_file); r=$(get run "$f")
+  put status "${1:-complete}" "$f"; put finished "$(now)" "$f"
+  local st; st=$(get started "$f"); st=$(date -u -j -f %Y-%m-%dT%H:%M:%SZ "$st" +%s 2>/dev/null || date -u -d "$st" +%s 2>/dev/null || echo "")
+  [ -n "$st" ] && put duration "$(dur $(( $(epoch) - st )))" "$f"
+  local tmp; tmp=$(mktemp "$MEM/index.md.XXXXXX")
+  awk -v r="$r" -v s="${1:-complete}" 'index($0,"- "r" | ")==1 {sub(/\| in_progress \|/, "| "s" |")} {print}' "$MEM/index.md" > "$tmp" && mv "$tmp" "$MEM/index.md"
+  rm -f "$ACTIVE"; echo "run $r ${1:-complete}"
+}
+
+case "${1:-}" in
+  init|next|done|skip|set|escalate|status|list|resume|finish) c=$1; shift; "cmd_$c" "$@";;
+  *) cat <<EOF
+usage: craftman-state <command>
+  init <run-id> [--profile full|lite] [--from STAGE] [--to STAGE] [--skip-deploy] [--max-agent-calls N] [--requirement TEXT]
+  next [run-id]              next pending step
+  done <step> [note]         mark step done (active run)
+  skip <step> <reason>       mark step skipped
+  set branch|packages_done <value>
+  escalate <text>            log an escalation
+  status [run-id] | list | resume <run-id> | finish [complete|aborted]
+stages: $STAGES
+EOF
+  exit 1;;
+esac

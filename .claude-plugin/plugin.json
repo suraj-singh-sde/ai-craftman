@@ -1,0 +1,30 @@
+{
+  "name": "ai-craftman",
+  "version": "0.5.0",
+  "description": "AI-SDLC pipeline: requirements, architecture, test-first engineering, QA and DevOps driven by an orchestration layer, specialist agents, persistent memory, enforced approval gates and human oversight.",
+  "author": {
+    "name": "Suraj Singh",
+    "url": "https://github.com/suraj-singh-sde"
+  },
+  "homepage": "https://github.com/suraj-singh-sde/ai-craftman",
+  "repository": "https://github.com/suraj-singh-sde/ai-craftman",
+  "license": "MIT",
+  "keywords": ["sdlc", "orchestration", "agents", "tdd", "devops", "governance"],
+  "userConfig": {
+    "model_tier": {
+      "type": "string",
+      "title": "Model tier",
+      "description": "economy: opus agents run on sonnet. balanced: each agent's default. max: sonnet agents run on opus.",
+      "default": "balanced",
+      "options": ["economy", "balanced", "max"]
+    },
+    "max_agent_calls": {
+      "type": "number",
+      "title": "Agent budget per run",
+      "description": "Maximum AI-Craftman agent dispatches per run before the human must approve more.",
+      "default": 60,
+      "min": 10,
+      "max": 500
+    }
+  }
+}

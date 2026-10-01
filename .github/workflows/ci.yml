@@ -1,0 +1,53 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+jobs:
+  static:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install -g @anthropic-ai/claude-code
+      - name: Validate plugin
+        run: claude plugin validate .
+      - name: Shellcheck
+        run: shellcheck -S error bin/craftman-state scripts/*.sh tests/run.sh evals/*/scaffold.sh
+      - name: Hook and state self-check
+        run: tests/run.sh
+      - name: Sample app tests
+        working-directory: examples/sample-app
+        run: python3 -m unittest discover -s tests -t .
+
+  evals:
+    # Paid: runs on main and on demand only. Needs the ANTHROPIC_API_KEY secret.
+    if: github.event_name != 'pull_request'
+    needs: static
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - run: npm install -g @anthropic-ai/claude-code
+      - name: Smoke evals
+        env:
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+        run: |
+          git config --global user.email ci@example.com
+          git config --global user.name ci
+          claude plugin eval . --tag smoke --runs 1 --ablation none --scaffold \
+            --allow-tools Bash Write Edit --trust-plugin --no-publish \
+            --threshold 0.75 --model claude-sonnet-5-5 --judge-model claude-haiku-4-5 \
+            --max-cost-usd 10 --json results.json
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: eval-results
+          path: results.json

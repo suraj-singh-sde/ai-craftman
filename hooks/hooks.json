@@ -1,0 +1,25 @@
+{
+  "description": "AI-Craftman guardrails: approval-gated deploys, protected run files, secret scan on memory, test-file lock for implementers, agent budget, human answer audit log.",
+  "hooks": {
+    "PreToolUse": [
+      {
+        "matcher": "Bash",
+        "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/deploy-guard.sh\"" }]
+      },
+      {
+        "matcher": "Write|Edit|MultiEdit|NotebookEdit",
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/file-guard.py\"" }]
+      },
+      {
+        "matcher": "Agent|Task|SendMessage",
+        "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/scripts/agent-budget.sh\"" }]
+      }
+    ],
+    "PostToolUse": [
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/record-answers.py\"" }]
+      }
+    ]
+  }
+}

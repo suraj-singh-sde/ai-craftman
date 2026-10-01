@@ -1,0 +1,16 @@
+{
+  "name": "ai-craftman",
+  "description": "AI-Craftman: AI-SDLC pipeline plugin for Claude Code.",
+  "owner": {
+    "name": "Suraj Singh",
+    "url": "https://github.com/suraj-singh-sde"
+  },
+  "plugins": [
+    {
+      "name": "ai-craftman",
+      "source": "./",
+      "description": "AI-SDLC pipeline with orchestration layer, specialist agents, persistent memory and human oversight.",
+      "version": "0.5.0"
+    }
+  ]
+}
