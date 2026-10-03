@@ -106,6 +106,10 @@ Hand-rolling any of these is a **high** review finding unless an ADR names a spe
 - Test through public contracts. Fakes/in-memory adapters for unit tests, the real adapter in integration.
 - Coverage target comes from governance (default 80%). Do not chase 100% with trivial tests.
 - Tests are independent so they can run in parallel. Slow tests (load, memory, real servers) are marked and excluded from the fast loop, never from QA or release.
+- Every test has a time limit from the test runner (about 60s; less for unit tests), so a hang fails in seconds instead of blocking the run. Wait for a condition with a bounded poll, never an unbounded loop or a long fixed sleep.
+- A flaky test is a defect. Find the cause; don't rerun it until it passes.
+- Tests that start containers, servers or background processes stop them in teardown, also when the test fails or times out (fixture finalizers, `try/finally`). A test run leaves nothing running.
+- Never assert placeholder behavior (a stub that returns 501 or raises `NotImplemented`). The next package replaces the stub, so the test breaks by design. Test that routes are registered, not what unfinished ones return.
 
 ## Review rubric (severity)
 - **critical**: security hole, data loss, crash on a normal path.

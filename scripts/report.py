@@ -2,9 +2,11 @@
 """Build .craftman/memory/<run>/report.html: status, design and results of one run.
 
 Usage: report.py <run-dir> <steps>   (steps = craftman-state's FULL_STEPS, "step:stage:owner" lines)
+       report.py --lint <file.md>...  (exit 1 and list mermaid diagrams that will not render)
 Read-only view: it never changes the run. Markdown and mermaid render in the browser;
 offline, each document falls back to plain text.
 """
+import hashlib
 import html
 import json
 import re
@@ -16,6 +18,50 @@ DESIGN = ["06-hld.md", "07-gov-architecture.md", "08-oversight-architecture.md",
 STATUS = ["approvals.md", "escalations.md", "answers.md"]
 STEP_RE = re.compile(r"^- \[(.)\] (\S+)\s*(.*)$")
 TOOK_RE = re.compile(r"took (\S+)\)")
+
+
+BRACKETS = re.compile(r"[()\[\]{}]")
+PLAIN = r"[^()\[\]{}]*"
+# a node shape right after its id, with bracket-free text: [(..)] ([..]) [[..]] ((..)) {{..}} [/../] [\..\] >..] [..] (..) {..}
+SHAPES = [re.compile(r"(?<=\w)" + p) for p in (
+    rf"\[\({PLAIN}\)\]", rf"\(\[{PLAIN}\]\)", rf"\[\[{PLAIN}\]\]", rf"\(\(\({PLAIN}\)\)\)", rf"\(\({PLAIN}\)\)",
+    rf"\{{\{{{PLAIN}\}}\}}", rf"\[[/\\]{PLAIN}[/\\]\]", rf">{PLAIN}\]", rf"\[{PLAIN}\]", rf"\({PLAIN}\)", rf"\{{{PLAIN}\}}")]
+
+
+def lint_mermaid(text):
+    """Problems that stop a diagram from rendering, as (line number, message).
+
+    ponytail: not a mermaid parser. It knows the two failures real runs produced (checked against mermaid 11):
+    an unquoted flowchart label containing ( ) [ ] { }, and ';' in sequence-diagram text. The browser stays the
+    real parser; add a rule here when a new failure shows up in a run.
+    """
+    problems, kind = [], None
+    for no, line in enumerate(text.splitlines(), 1):
+        if kind is None:
+            if re.match(r"\s*```mermaid\s*$", line):
+                kind = ""
+            continue
+        if re.match(r"\s*```\s*$", line):
+            kind = None
+            continue
+        code = line.split("%%")[0]
+        if kind == "":
+            kind = (code.split() or [""])[0]
+            continue
+        if kind in ("flowchart", "graph"):
+            rest = re.sub(r'"[^"]*"', '""', code)             # quoted labels are always fine
+            rest = re.sub(r"@\{[^{}]*\}", "", rest)
+            labels = re.findall(r"\|([^|]*)\|", rest)        # edge labels
+            rest = re.sub(r"\|[^|]*\|", "", rest)
+            rest = re.sub(r"(--|==|-\.)\s[^|\[\]{}]*?\s(-{2,}>?|={2,}>?|\.-+>?)", " --> ", rest)   # A -- text (x) --> B is valid
+            rest = re.sub(rf"^(\s*subgraph\s+\S+)\s+\[({PLAIN})\]", r"\1", rest)
+            for shape in SHAPES:
+                rest = shape.sub("", rest)
+            if BRACKETS.search(rest) or any(BRACKETS.search(label) for label in labels):
+                problems.append((no, 'a label contains ( ) [ ] { } without quotes; write it as id["label (text)"] or -->|"label (text)"|'))
+        elif kind == "sequenceDiagram" and ":" in code and ";" in code.split(":", 1)[1]:
+            problems.append((no, "';' ends the statement in a sequence diagram; use a comma or 'and'"))
+    return problems
 
 
 def header(text):
@@ -56,9 +102,10 @@ def build(run, steps):
     data = {"info": info, "steps": rows, "status": pick(STATUS), "design": pick(DESIGN),
             "results": [doc(run, f) for f in results]}
     # "</" is escaped so no document can close the script tag it is embedded in
+    data["version"] = hashlib.sha1(json.dumps(data, sort_keys=True).encode()).hexdigest()[:12]
     blob = json.dumps(data).replace("</", "<\\/")
     title = html.escape(f"AI-Craftman · {info.get('run', run.name)}")
-    return PAGE.replace("{{TITLE}}", title).replace("{{DATA}}", blob)
+    return PAGE.replace("{{TITLE}}", title).replace("{{DATA}}", blob), data["version"]
 
 
 PAGE = r"""<!doctype html>
@@ -105,7 +152,7 @@ const md = t => (window.marked && window.DOMPurify) ? DOMPurify.sanitize(marked.
 
 function card(d, open) {
   const m = d.meta, q = +m.open_questions ? pill(m.open_questions + ' open questions') : '';
-  return `<details class="card"${open ? ' open' : ''}><summary><code>${esc(d.path)}</code>
+  return `<details class="card" data-k="${esc(d.path)}"${open ? ' open' : ''}><summary><code>${esc(d.path)}</code>
     ${m.agent ? `<span class="muted">${esc(m.agent)}</span>` : ''}${pill(m.status)}${m.verdict && m.verdict !== 'n/a' ? pill(m.verdict) : ''}${q}</summary>
     <div class="body">${md(d.body)}</div></details>`;
 }
@@ -130,15 +177,37 @@ const steps = `<div class="tablewrap"><table><tr><th>Step</th><th>Stage</th><th>
   <td class="muted">${esc(s.note.replace(/\(done [^)]*\)|\(skipped: ([^)]*)\)/, '$1'))}</td></tr>`).join('')}</table></div>
   ${slow ? `<p class="muted">Slowest steps: ${slow}</p>` : ''}`;
 
+// Diagrams first: every mermaid block of the HLD and LLD, under the heading it sits in. They are what the human approves.
+const DESIGNS = {'06-hld.md': I.profile === 'lite' ? 'Design' : 'HLD', '08a-lld.md': 'LLD'};
+const diagrams = D.design.filter(d => DESIGNS[d.path]).map(d => {
+  const found = []; let head = '', code = null;
+  d.body.split('\n').forEach(line => {
+    if (code !== null) { if (/^\s*```\s*$/.test(line)) { found.push([head, code.join('\n')]); code = null; } else code.push(line); }
+    else if (/^\s*```mermaid\s*$/.test(line)) code = [];
+    else if (/^#{1,6}\s/.test(line)) head = line.replace(/^#+\s*/, '');
+  });
+  return found.length ? `<details class="card" data-k="diagrams:${esc(d.path)}" open><summary><code>${DESIGNS[d.path]} diagrams</code>
+    <span class="muted">${found.length} from ${esc(d.path)}</span></summary><div class="body">${
+    found.map(([h, c]) => `<h4>${esc(h)}</h4><div class="mermaid">${esc(c)}</div>`).join('')}</div></details>` : '';
+}).join('');
 const tabs = {
   Status: steps + list(D.status, ''),
-  Design: list(D.design, 'No design documents yet. The HLD appears after the architecture step.'),
+  Design: diagrams + list(D.design, 'No design documents yet. The HLD appears after the architecture step.'),
   Results: list(D.results, 'No results yet.'),
 };
 let draw = () => {};
 if (window.mermaid) {
   mermaid.initialize({ startOnLoad: false, securityLevel: 'strict' });
-  draw = root => mermaid.run({ nodes: [...root.querySelectorAll('details[open] .mermaid:not([data-processed])')] }).catch(() => {});
+  const todo = root => [...root.querySelectorAll('details[open] .mermaid:not([data-processed])')];
+  // a diagram that does not parse is shown as its source with the reason, not as an error image
+  draw = async root => {
+    for (const n of todo(root)) {
+      try { await mermaid.parse(n.textContent); } catch (e) {
+        n.outerHTML = `<p class="bad">This diagram has a syntax error and cannot be drawn: ${esc(String(e.message || e).split('\n').slice(0, 2).join(' '))}</p><pre>${esc(n.textContent)}</pre>`;
+      }
+    }
+    mermaid.run({ nodes: todo(root) }).catch(() => {});
+  };
 }
 const nav = document.getElementById('tabs'), main = document.getElementById('main');
 let saved; try { saved = localStorage.getItem('craftman-tab'); } catch (e) {}
@@ -155,13 +224,39 @@ Object.entries(tabs).forEach(([name, html], i) => {
   if (name === saved || (!saved && i === 0)) b.click();
 });
 
-// keep a running pipeline's page current
-if (I.status === 'in_progress') setTimeout(() => location.reload(), 30000);
+// Keep a running pipeline's page current: reload when craftman-state has rebuilt the report (report-version.js changes),
+// and put the reader back where they were, so a design being read is not closed or scrolled away.
+const VIEW = 'craftman-view';
+try {
+  const v = JSON.parse(sessionStorage.getItem(VIEW) || 'null');
+  if (v) {
+    sessionStorage.removeItem(VIEW);
+    document.querySelectorAll('details[data-k]').forEach(d => { d.open = v.open.includes(d.dataset.k); });
+    setTimeout(() => scrollTo(0, v.y), 400);
+  }
+} catch (e) {}
+window.craftmanVersion = v => {
+  if (v === D.version) return;
+  try { sessionStorage.setItem(VIEW, JSON.stringify({ y: scrollY, open: [...document.querySelectorAll('details[open][data-k]')].map(d => d.dataset.k) })); } catch (e) {}
+  location.reload();
+};
+if (I.status === 'in_progress') setInterval(() => {
+  const s = document.createElement('script'); s.src = 'report-version.js?' + Date.now();
+  s.onload = s.onerror = () => s.remove(); document.head.append(s);
+}, 10000);
 </script></body></html>
 """
 
 if __name__ == "__main__":
+    if sys.argv[1] == "--lint":
+        found = [(f, no, msg) for f in sys.argv[2:] for no, msg in lint_mermaid(Path(f).read_text(errors="replace"))]
+        for f, no, msg in found:
+            print(f"  {Path(f).name} line {no}: {msg}")
+        sys.exit(1 if found else 0)
     run_dir = Path(sys.argv[1])
     out = run_dir / "report.html"
-    out.write_text(build(run_dir, sys.argv[2] if len(sys.argv) > 2 else ""))
+    page, version = build(run_dir, sys.argv[2] if len(sys.argv) > 2 else "")
+    out.write_text(page)
+    # an open page polls this file and reloads itself only when the report was rebuilt
+    (run_dir / "report-version.js").write_text(f'window.craftmanVersion && window.craftmanVersion("{version}");\n')
     print(out)

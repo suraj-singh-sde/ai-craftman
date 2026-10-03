@@ -1,4 +1,7 @@
 worktrees/
+active-run
+.lock
 memory/*/report.html
+memory/*/report-version.js
 # Per-run memory is optional to commit; context/ and governance.md should be committed.
 # memory/

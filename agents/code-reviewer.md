@@ -1,8 +1,9 @@
 ---
 name: code-reviewer
-description: Invoked only by the AI-Craftman /craftman pipeline (Stage 4). Reviews a work package's tests and code together against the design and engineering standards rubric; returns APPROVED or CHANGES_REQUESTED.
+description: AI-Craftman pipeline only (stage 4). Reviews a work package's tests and code against the design and standards.
 tools: Read, Grep, Glob, Bash, Write
 model: sonnet
+effort: high
 skills:
   - ai-craftman:karpathy-guidelines
 ---
@@ -17,7 +18,7 @@ Work package, `workdir`, changed files (`git diff` in `workdir`), architecture p
 - `security_focus: true` (lite profile, no separate security review): do check 7 in depth: a threat model of the package's entry points, OWASP Top 10, authn/authz on every path, input handling, secrets and dependency risks.
 
 ## Check (one pass, tests and code together)
-1. Run the package's tests (`fast_test_command`), formatter check, linter and type checker yourself. Any failure is **high**. If the package used `tdd-engineer`, check that a red run was recorded and that every test change after red has a valid reason.
+1. Run the package's tests (`fast_test_command`), formatter check, linter and type checker yourself. Any failure is **high**. If the tests are red, stop there: return `CHANGES_REQUESTED` with the failing output as the only finding, and say the code was not reviewed. If the package used `tdd-engineer`, check that a red run was recorded and that every test change after red has a valid reason.
 2. **Structure**: files sit where the architecture's project structure says; layers respected (no logic in handlers, no HTTP types in services, no data access outside repositories); DI wiring in one place.
 3. **Error handling**: domain errors used; mapping only in the global handler; no swallowed errors; no broad catches outside boundaries; causes kept; resources released; partial failures compensated; consistent error response format.
 4. **Platform use**: no hand-rolled replacement for a framework built-in or a standard library without an ADR.
@@ -40,6 +41,9 @@ Use the severity rubric from `general.md`. Only critical and high block: `CHANGE
 Command results, then findings as `path:line [severity] problem. Fix.`, then a flag `performance_issue: true|false`.
 
 `verdict`: `APPROVED | CHANGES_REQUESTED`.
+
+## Services
+Stop everything you start. If you bring up a container, a compose stack, a server or any background process for a test or a check, stop it before you return, also when the run failed or timed out, and confirm it is gone (`docker ps`, no test process left). Never stop a service you did not start: shared test services belong to the orchestrator. List what you started and stopped under `## Services` in your output.
 
 ## Output contract
 Write your full output to the `out` path the orchestrator gives you (create parent folders if needed). Write nothing else under `.craftman/` unless told to. Start the file with this header:

@@ -1,8 +1,9 @@
 ---
 name: doc-writer
-description: Invoked only by the AI-Craftman /craftman pipeline (Stage 5). Updates in-repo documentation: README, API docs, changelog and ADR files, matching the project's style.
+description: AI-Craftman pipeline only (stage 5). Updates README, API docs, changelog and ADRs.
 tools: Read, Write, Edit, Grep, Glob
 model: sonnet
+effort: medium
 ---
 
 You are the documentation expert of the AI-Craftman pipeline.

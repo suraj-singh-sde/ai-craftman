@@ -6,7 +6,7 @@ A question whose text starts with [APPROVAL:<category>] and whose answer starts 
 "Approve" adds `granted: <category>` to approvals.md, which the deploy guard reads.
 Approving `budget` raises max_agent_calls by 50%.
 """
-import datetime, getpass, json, os, re, subprocess, sys
+import contextlib, datetime, getpass, json, os, re, subprocess, sys, time
 
 APPROVAL = re.compile(r"^\s*\[APPROVAL:([a-z-]+)\]")
 
@@ -17,6 +17,25 @@ def who():
     except Exception:
         name = ""
     return name or getpass.getuser()
+
+
+@contextlib.contextmanager
+def state_lock(root):
+    """Same lock as craftman-state and the budget hook; a stale lock is taken over after ~5s."""
+    lock = os.path.join(root, ".craftman", ".lock")
+    for _ in range(50):
+        try:
+            os.mkdir(lock)
+            break
+        except FileExistsError:
+            time.sleep(0.1)
+    try:
+        yield
+    finally:
+        try:
+            os.rmdir(lock)
+        except OSError:
+            pass
 
 
 def answers_of(data):
@@ -57,11 +76,14 @@ def main():
     if "budget" in grants:
         state = os.path.join(rundir, "state.md")
         if os.path.isfile(state):
-            s = open(state).read()
-            m = re.search(r"^max_agent_calls: (\d+)$", s, re.M)
-            if m:
-                new = int(int(m.group(1)) * 1.5) + 1
-                open(state, "w").write(s[: m.start(1)] + str(new) + s[m.end(1):])
+            with state_lock(root):
+                s = open(state).read()
+                m = re.search(r"^max_agent_calls: (\d+)$", s, re.M)
+                if m:
+                    new = int(int(m.group(1)) * 1.5) + 1
+                    with open(state + ".tmp", "w") as f:
+                        f.write(s[: m.start(1)] + str(new) + s[m.end(1):])
+                    os.replace(state + ".tmp", state)
 
 
 if __name__ == "__main__":

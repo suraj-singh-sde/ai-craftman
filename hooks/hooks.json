@@ -1,5 +1,5 @@
 {
-  "description": "AI-Craftman guardrails: approval-gated deploys, protected run files, secret scan on memory, test-file lock for implementers, agent budget, human answer audit log.",
+  "description": "AI-Craftman guardrails: approval-gated deploys, protected run files, secret scan on memory, test-file lock for implementers, agent budget, human answer audit log, desktop notification when a question waits.",
   "hooks": {
     "PreToolUse": [
       {
@@ -9,6 +9,10 @@
       {
         "matcher": "Write|Edit|MultiEdit|NotebookEdit",
         "hooks": [{ "type": "command", "command": "python3 \"${CLAUDE_PLUGIN_ROOT}/scripts/file-guard.py\"" }]
+      },
+      {
+        "matcher": "AskUserQuestion",
+        "hooks": [{ "type": "command", "command": "\"${CLAUDE_PLUGIN_ROOT}/bin/craftman-state\" notify \"A question is waiting for your answer\"" }]
       },
       {
         "matcher": "Agent|Task|SendMessage",
