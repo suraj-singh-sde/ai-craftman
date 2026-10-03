@@ -177,17 +177,18 @@ These apply only while a run is active (`.craftman/active-run` exists), so the p
 | Guard | Hook |
 |---|---|
 | Deploy, destroy, publish, `git push`, `gh pr create` and tracker commands are blocked until the human answers `Approve` to an `[APPROVAL:<category>]` question | `PreToolUse(Bash)` deploy-guard |
-| A push approval covers a plain push only: forced pushes and remote branch deletes need `[APPROVAL:destroy]` | deploy-guard |
-| A gate (`gov-*`, `approve-*`, `security-review`, `qa`) can be marked done only when its result file shows the passing verdict or the human's grant is recorded; skipping one needs `[APPROVAL:waiver]` | `craftman-state` |
+| A push approval covers a plain push only: forced pushes, remote branch deletes, `--mirror` and `--prune` need `[APPROVAL:destroy]` | deploy-guard |
+| A gate (`gov-*`, `approve-*`, `security-review`, `qa`) can be marked done only when its result file shows the passing verdict or the human's grant is recorded; the newest result decides, and skipping or overriding one needs the human's waiver for that gate (`[APPROVAL:waiver-<gate>]`) | `craftman-state` |
+| Switching a run to `lite` (which skips gates) is allowed only for a change sized `small`, before any design, and never against a `--profile` the human chose | `craftman-state` |
 | Engineering agents cannot be dispatched while the architecture gates are pending: no code before the approved design | `PreToolUse(Agent)` agent-budget |
 | The HLD and LLD are done only with mermaid diagrams that will render (unquoted labels with brackets and `;` in sequence messages are refused) | `craftman-state` |
 | Every human answer is logged with who and when; approvals become grants | `PostToolUse(AskUserQuestion)` record-answers |
-| `state.md`, `approvals.md`, `answers.md` cannot be edited by the model, and `.craftman/` cannot be deleted | deploy-guard + file-guard |
+| `state.md`, `approvals.md`, `answers.md` cannot be edited by the model, and `.craftman/` cannot be deleted or moved (`rm`, `mv`, `find -delete`, `git clean -x`) | deploy-guard + file-guard |
 | Secrets cannot be written into `.craftman/` | `PreToolUse(Write/Edit)` file-guard |
 | `code-writer` / `code-optimizer` cannot edit test files | file-guard (by `agent_type`) |
 | Agent dispatch budget per run; extending it needs `[APPROVAL:budget]` | `PreToolUse(Agent)` agent-budget |
 
-The guards match command patterns. They make skipping approvals hard, but they are not a security sandbox.
+The guards match command patterns. They make skipping approvals hard, but they are not a security sandbox: a command built from variables or run through `eval` is not recognised, and a gate's result file is trusted as written.
 
 **Spin-down.** Whatever a run starts for testing, it stops. Every agent that can run commands must stop the containers, compose stacks, servers and background processes it started before it returns. `craftman-state` records what was already running when the run began, and `craftman-state services` lists what is up now that was not: containers, and processes that reference the project (a hung test run, a dev server). The orchestrator checks it after each engineering group and at the end, stops what the run started, and leaves everything else alone. `craftman-state finish` prints anything still up.
 

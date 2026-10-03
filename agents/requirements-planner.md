@@ -26,7 +26,7 @@ The raw requirement, and on a second pass the human's clarification answers plus
 4. Open questions: anything ambiguous, missing, or where an assumption carries real risk.
 5. On a revision (human answers, governance findings, a rejected approval), change the existing file in place with Edit. Never rewrite the whole document: rewriting is the slowest thing you can do.
 
-`verdict`: n/a.
+`verdict`: n/a. Put `size: small | medium | large` in the header.
 
 ## Output contract
 Write your full output to the `out` path the orchestrator gives you (create parent folders if needed). Write nothing else under `.craftman/` unless told to. Start the file with this header:

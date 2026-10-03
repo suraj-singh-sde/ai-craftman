@@ -88,12 +88,21 @@ design_ok() { # design_ok <dir> <file-prefix> <diagrams>: the design has its mer
   local problems; problems=$(python3 "$REPORT" --lint "$1/$2"*.md 2>/dev/null) \
     || die "$2.md has diagrams that will not render; have the architect fix them in place:"$'\n'"$problems"
 }
+latest() { # newest result of a gate: <prefix>.md is round 1, <prefix>-<n>.md is round n
+  local f n best="" top=0
+  for f in "$1"*.md; do
+    [ -f "$f" ] || continue
+    n=$(basename "$f" .md); n=${n##*-}; case "$n" in ''|*[!0-9]*) n=1;; esac
+    [ "$n" -ge "$top" ] && { best=$f; top=$n; }
+  done
+  echo "$best"
+}
 granted() { grep -Eq "^granted: $1( |\$)" "$(dirname "$2")/approvals.md" 2>/dev/null; }   # granted <category> <state-file>
 check_gate() { # check_gate <state-file> <step>: refuse unless the step's evidence exists
   local dir g prefix want; dir=$(dirname "$1")
   case "$2" in
     approve-architecture)
-      granted architecture "$1" || grep -qs '^verdict: NO_APPROVAL_NEEDED' "$dir"/08-oversight-architecture*.md \
+      granted architecture "$1" || grep -qs '^verdict: NO_APPROVAL_NEEDED' "$(latest "$dir/08-oversight-architecture")" \
         || die "approve-architecture needs the human's [APPROVAL:architecture] answer (or an oversight verdict NO_APPROVAL_NEEDED)";;
     approve-deploy) granted deploy "$1" || die "approve-deploy needs the human's [APPROVAL:deploy] answer";;
     # the human reads the design as diagrams (report, Design tab), so a design without them is not done
@@ -101,19 +110,20 @@ check_gate() { # check_gate <state-file> <step>: refuse unless the step's eviden
     design) design_ok "$dir" 08a-lld "modules, data model, main flows";;
     *) g=$(echo "$GATES" | grep "^$2:") || return 0
        prefix=$(echo "$g" | cut -d: -f2); want=$(echo "$g" | cut -d: -f3)
-       ls "$dir/$prefix"*.md >/dev/null 2>&1 || die "$2 has no result file ($prefix*.md); run the gate first"
-       grep -qs "^verdict: $want" "$dir/$prefix"*.md || granted waiver "$1" \
-         || die "$2 needs 'verdict: $want' in $prefix*.md, or a human waiver ([APPROVAL:waiver])";;
+       # the newest result decides (a later BLOCK overrides an earlier PASS); a waiver is for this gate only
+       g=$(latest "$dir/$prefix"); [ -n "$g" ] || die "$2 has no result file ($prefix*.md); run the gate first"
+       grep -qs "^verdict: $want" "$g" || granted "waiver-$2" "$1" \
+         || die "$2 needs 'verdict: $want' in $(basename "$g"), or the human's waiver for this gate ([APPROVAL:waiver-$2])";;
   esac
 }
 
 cmd_init() {
   local run="${1:-}"; shift || true
   [ -n "$run" ] || die "usage: init <run-id> [--profile full|lite] [--from STAGE] [--to STAGE] [--skip-deploy] [--lead] [--max-agent-calls N] [--requirement TEXT]"
-  local profile=full from=requirements to=devops skipdeploy=0 lead=off max=60 req=""
+  local profile=full setby=default from=requirements to=devops skipdeploy=0 lead=off max=60 req=""
   while [ $# -gt 0 ]; do
     case "$1" in
-      --profile) profile="$2"; shift 2;;
+      --profile) profile="$2"; setby=flag; shift 2;;
       --from) from="$2"; shift 2;;
       --to) to="$2"; shift 2;;
       --skip-deploy) skipdeploy=1; shift;;
@@ -134,6 +144,7 @@ cmd_init() {
     echo "run: $run"
     echo "requirement: $req"
     echo "profile: $profile"
+    echo "profile_set_by: $setby"
     echo "lead: $lead"
     echo "status: in_progress"
     echo "started: $(now)"
@@ -180,12 +191,20 @@ cmd_next() {
 cmd_done() { local f; f=$(state_file); check_gate "$f" "${1:?step}"; mark "$f" "$1" x "(done $(now), took $(elapsed "$f")) ${2:-}"; put last_mark "$(epoch)" "$f"; refresh "$f"; cmd_next; }
 cmd_skip() {
   local f; f=$(state_file)
-  case " $PROTECTED " in *" ${1:?step} "*) granted waiver "$f" || die "$1 is a gate: only the profile, --from/--to or a human waiver ([APPROVAL:waiver]) can skip it";; esac
+  case " $PROTECTED " in *" ${1:?step} "*) granted "waiver-$1" "$f" || die "$1 is a gate: only the profile, --from/--to or the human's waiver for it ([APPROVAL:waiver-$1]) can skip it";; esac
   mark "$f" "$1" - "(skipped: ${2:?reason})"; put last_mark "$(epoch)" "$f"; refresh "$f"; cmd_next
 }
 cmd_profile() { # switch the active run to lite once the size is known; only pending steps are skipped
   [ "${1:-}" = lite ] || die "usage: profile lite"
-  local f s; f=$(state_file); put profile lite "$f"
+  local f s; f=$(state_file)
+  # lite skips gates, so it is not a free choice: only for a change the planner sized small, before any design,
+  # and never against a profile the human chose
+  if ! granted waiver-profile "$f"; then
+    [ "$(get profile_set_by "$f")" = default ] || die "the human chose this profile (--profile); switching to lite needs [APPROVAL:waiver-profile]"
+    grep -Eqis '^size: *small' "$(dirname "$f")"/01-requirements*.md || die "lite needs 'size: small' in the header of 01-requirements.md, or [APPROVAL:waiver-profile]"
+  fi
+  grep -Eq '^- \[ \] architecture( |$)' "$f" || die "too late for lite: the architecture step is no longer pending"
+  put profile lite "$f"
   for s in $LITE_SKIP; do grep -Eq "^- \[ \] $s( |\$)" "$f" && mark "$f" "$s" - "(skipped: lite profile)"; done
   refresh "$f"; cmd_next
 }

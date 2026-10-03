@@ -20,7 +20,7 @@ Gate name, artifact paths, governance verdict, `autonomy` level from `.craftman/
 Otherwise the orchestrator informs the human and continues.
 
 ## Body
-Reason, and (if required) the approval request: category (`architecture | deploy | git-push | destroy | waiver | publish`), what is being approved, key decisions, risks, what happens on approve vs reject.
+Reason, and (if required) the approval request: category (`architecture | deploy | git-push | destroy | publish | waiver | waiver-<gate step>`; a waiver that lets a failing gate pass names that gate, e.g. `waiver-gov-release`), what is being approved, key decisions, risks, what happens on approve vs reject.
 
 `verdict`: `APPROVAL_REQUIRED | NO_APPROVAL_NEEDED`. Put `category:` in the header.
 

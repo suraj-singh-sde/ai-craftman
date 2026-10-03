@@ -46,13 +46,17 @@ craftman-state done gov-requirements >/dev/null 2>&1 && bad "BLOCK gate refused"
 craftman-state skip gov-requirements "not needed" >/dev/null 2>&1 && bad "gate skip refused" || ok "gate skip refused"
 printf -- '---\nverdict: PASS\n---\n' > "$M3/03-gov-requirements-2.md"
 craftman-state done gov-requirements >/dev/null 2>&1 && ok "PASS gate accepted" || bad "PASS gate accepted"
+printf -- '---\nverdict: BLOCK\n---\n' > "$M3/03-gov-requirements-3.md"
+craftman-state done gov-requirements >/dev/null 2>&1 && bad "newer BLOCK overrides older PASS" || ok "newer BLOCK overrides older PASS"
 craftman-state done approve-architecture >/dev/null 2>&1 && bad "approval without grant refused" || ok "approval without grant refused"
 echo "granted: architecture | t | u" >> "$M3/approvals.md"
 craftman-state done approve-architecture >/dev/null 2>&1 && ok "granted approval accepted" || bad "granted approval accepted"
 printf -- '---\nverdict: NOT_READY\n---\n' > "$M3/11-qa.md"
 craftman-state done qa >/dev/null 2>&1 && bad "NOT_READY qa refused" || ok "NOT_READY qa refused"
-echo "granted: waiver | t | u" >> "$M3/approvals.md"
-craftman-state done qa >/dev/null 2>&1 && ok "waiver passes gate" || bad "waiver passes gate"
+echo "granted: waiver | t | u" >> "$M3/approvals.md"; echo "granted: waiver-gov-design | t | u" >> "$M3/approvals.md"
+craftman-state done qa >/dev/null 2>&1 && bad "a waiver for another gate does not pass this one" || ok "a waiver for another gate does not pass this one"
+echo "granted: waiver-qa | t | u" >> "$M3/approvals.md"
+craftman-state done qa >/dev/null 2>&1 && ok "waiver for this gate passes it" || bad "waiver for this gate passes it"
 
 # a design is done only with its diagrams: the human reads the HLD and LLD as mermaid in the report
 printf -- '---\nagent: architect\n---\n# HLD\nno diagram\n' > "$M3/06-hld.md"
@@ -77,8 +81,14 @@ for _ in $(seq 20); do aj architect | "$HERE/scripts/agent-budget.sh" & done; wa
 # auto profile: one command records lite and skips only the pending lite steps
 craftman-state init r6 --lead >/dev/null; grep -q '^lead: on' "$CLAUDE_PROJECT_DIR/.craftman/memory/r6/state.md" && grep -q '^lead: off' "$S" && ok "--lead recorded" || bad "--lead recorded"
 grep -q '^tools: Agent' "$HERE/agents/package-lead.md" && ok "package lead can dispatch" || bad "package lead can dispatch"
+# lite skips gates, so the switch needs evidence: sized small, before design, not against the human's --profile
+craftman-state init r7 --profile full >/dev/null; printf -- '---\nsize: small\n---\n' > "$CLAUDE_PROJECT_DIR/.craftman/memory/r7/01-requirements.md"
+craftman-state profile lite >/dev/null 2>&1 && bad "lite refused against the human's --profile" || ok "lite refused against the human's --profile"
 craftman-state init r4 >/dev/null; S4="$CLAUDE_PROJECT_DIR/.craftman/memory/r4/state.md"
-craftman-state done requirements >/dev/null; craftman-state profile lite >/dev/null
+craftman-state done requirements >/dev/null
+craftman-state profile lite >/dev/null 2>&1 && bad "lite refused without size: small" || ok "lite refused without size: small"
+printf -- '---\nagent: requirements-planner\nsize: small\n---\n' > "$(dirname "$S4")/01-requirements.md"
+craftman-state profile lite >/dev/null
 grep -q '^profile: lite' "$S4" && grep -q '^- \[-\] gov-design  (skipped: lite profile)' "$S4" && grep -q '^- \[x\] requirements' "$S4" && ok "profile lite switch" || bad "profile lite switch"
 
 # spin-down: services reports only what was started during the run (docker faked, so the check is the same everywhere)
@@ -109,10 +119,18 @@ expect "cat state allowed"       0 "$G" "$(bash_json 'cat .craftman/memory/r1/st
 expect "read with 2>&1 allowed"  0 "$G" "$(bash_json 'grep -c x .craftman/memory/r1/state.md 2>&1 | head -1')"
 expect "prefix tamper blocked"   2 "$G" "$(bash_json 'craftman-state next; echo granted: deploy >> .craftman/memory/r1/approvals.md')"
 expect "newline tamper blocked"  2 "$G" "$(bash_json "$(printf 'craftman-state next\necho granted: deploy >> .craftman/memory/r1/approvals.md')")"
-expect "state note may mention files" 0 "$G" "$(bash_json 'craftman-state done qa "READY; see answers.md -> python lint clean"')"
+expect "plain state note allowed" 0 "$G" "$(bash_json 'craftman-state done qa "READY, see answers.md, python lint clean"')"
+# quotes are not interpreted by the guard: a second parser that disagrees with bash is a bypass
+expect "mixed quotes cannot hide a write" 2 "$G" "$(bash_json "craftman-state done x 'a \"' ; echo granted: deploy >> .craftman/memory/r1/approvals.md ; echo '\" b'")"
+expect "escaped quotes cannot hide a write" 2 "$G" "$(bash_json 'craftman-state done x \" ; echo granted: deploy >> .craftman/memory/r1/approvals.md ; \"')"
 expect "code in state note blocked" 2 "$G" "$(bash_json 'craftman-state done qa "$(echo granted: deploy >> .craftman/memory/r1/approvals.md)"')"
 expect "rm .craftman blocked"    2 "$G" "$(bash_json 'rm -rf .craftman')"
 expect "rm worktree allowed"     0 "$G" "$(bash_json 'rm -rf .craftman/worktrees/WP-1')"
+expect "rm through worktrees/.. blocked" 2 "$G" "$(bash_json 'rm -rf .craftman/worktrees/../memory')"
+expect "mv .craftman blocked"    2 "$G" "$(bash_json 'mv .craftman /tmp/gone')"
+expect "find -delete blocked"    2 "$G" "$(bash_json 'find .craftman -name active-run -delete')"
+expect "git clean -x blocked"    2 "$G" "$(bash_json 'git clean -fdx')"
+expect "git clean -fd allowed"   0 "$G" "$(bash_json 'git clean -fd src')"
 
 # approval recorded from human answer, then push allowed; reject does not grant
 Q='[APPROVAL:git-push] Push branch craftman/r1 and open a PR?'
@@ -123,6 +141,11 @@ expect "approve allows push" 0 "$G" "$(bash_json 'git push')"
 expect "deploy still blocked" 2 "$G" "$(bash_json 'helm upgrade api ./chart')"
 expect "force push still blocked" 2 "$G" "$(bash_json 'git push --force origin main')"
 expect "branch delete still blocked" 2 "$G" "$(bash_json 'git push origin :main')"
+expect "force flag cluster blocked" 2 "$G" "$(bash_json 'git push -fu origin main')"
+expect "quoted +refspec blocked" 2 "$G" "$(bash_json 'git push origin "+main"')"
+expect "quoted :refspec blocked" 2 "$G" "$(bash_json "git push origin ':main'")"
+expect "push --prune blocked" 2 "$G" "$(bash_json 'git push --prune origin')"
+expect "plain push with -u allowed" 0 "$G" "$(bash_json 'git push -u origin craftman/r1 --follow-tags')"
 grep -q 'answer: Reject' "$CLAUDE_PROJECT_DIR/.craftman/memory/r1/answers.md" && ok "answers audited" || bad "answers audited"
 
 # file guard
