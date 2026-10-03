@@ -10,7 +10,7 @@
       "name": "ai-craftman",
       "source": "./",
       "description": "AI-SDLC pipeline with orchestration layer, specialist agents, persistent memory and human oversight.",
-      "version": "0.5.0"
+      "version": "0.6.0"
     }
   ]
 }

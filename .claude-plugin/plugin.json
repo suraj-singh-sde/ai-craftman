@@ -1,6 +1,6 @@
 {
   "name": "ai-craftman",
-  "version": "0.5.0",
+  "version": "0.6.0",
   "description": "AI-SDLC pipeline: requirements, architecture, test-first engineering, QA and DevOps driven by an orchestration layer, specialist agents, persistent memory, enforced approval gates and human oversight.",
   "author": {
     "name": "Suraj Singh",

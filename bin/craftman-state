@@ -18,6 +18,8 @@ context-memory:context:memory-keeper
 architecture:architecture:architect
 gov-architecture:architecture:governance
 approve-architecture:architecture:human-oversight
+design:architecture:architect
+gov-design:architecture:governance
 work-plan:architecture:workflow-coordinator
 tracker-issues:architecture:orchestrator
 git-branch:engineering:orchestrator
@@ -33,7 +35,7 @@ approve-deploy:devops:human-oversight
 devops:devops:devops-engineer
 operations:devops:operations-engineer
 summary:finish:memory-keeper"
-LITE_SKIP="gov-requirements approve-architecture work-plan tracker-issues security-review"
+LITE_SKIP="gov-requirements approve-architecture design gov-design work-plan tracker-issues security-review"
 
 die() { echo "craftman-state: $*" >&2; exit 1; }
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -104,6 +106,7 @@ cmd_init() {
   mkdir -p "$MEM"; [ -f "$MEM/index.md" ] || echo "# AI-Craftman runs" > "$MEM/index.md"
   echo "- $run | in_progress | $(now) | ${req:0:100}" >> "$MEM/index.md"
   echo "$run" > "$ACTIVE"
+  refresh "$dir/state.md"
   echo "initialized $run ($profile, $from..$to$([ $skipdeploy = 1 ] && echo ', skip-deploy'))"
   cmd_next "$run"
 }
@@ -116,8 +119,12 @@ cmd_next() {
   echo "next: $step  stage: $(echo "$line" | cut -d: -f2)  owner: $(echo "$line" | cut -d: -f3)"
 }
 
-cmd_done() { local f; f=$(state_file); mark "$f" "${1:?step}" x "(done $(now), took $(elapsed "$f")) ${2:-}"; put last_mark "$(epoch)" "$f"; cmd_next; }
-cmd_skip() { local f; f=$(state_file); mark "$f" "${1:?step}" - "(skipped: ${2:?reason})"; put last_mark "$(epoch)" "$f"; cmd_next; }
+cmd_done() { local f; f=$(state_file); mark "$f" "${1:?step}" x "(done $(now), took $(elapsed "$f")) ${2:-}"; put last_mark "$(epoch)" "$f"; refresh "$f"; cmd_next; }
+cmd_skip() { local f; f=$(state_file); mark "$f" "${1:?step}" - "(skipped: ${2:?reason})"; put last_mark "$(epoch)" "$f"; refresh "$f"; cmd_next; }
+# report.html beside state.md; best effort, never fails a state change
+REPORT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/report.py"
+refresh() { python3 "$REPORT" "$(dirname "$1")" "$FULL_STEPS" >/dev/null 2>&1 || true; }
+cmd_report() { local f; f=$(state_file "${1:-}"); python3 "$REPORT" "$(dirname "$f")" "$FULL_STEPS"; }
 cmd_set() {
   local f; f=$(state_file); local k="${1:?key}" v="${2-}"
   case "$k" in branch|packages_done) ;; *) die "settable keys: branch, packages_done";; esac
@@ -143,11 +150,11 @@ cmd_finish() {
   [ -n "$st" ] && put duration "$(dur $(( $(epoch) - st )))" "$f"
   local tmp; tmp=$(mktemp "$MEM/index.md.XXXXXX")
   awk -v r="$r" -v s="${1:-complete}" 'index($0,"- "r" | ")==1 {sub(/\| in_progress \|/, "| "s" |")} {print}' "$MEM/index.md" > "$tmp" && mv "$tmp" "$MEM/index.md"
-  rm -f "$ACTIVE"; echo "run $r ${1:-complete}"
+  refresh "$f"; rm -f "$ACTIVE"; echo "run $r ${1:-complete}"
 }
 
 case "${1:-}" in
-  init|next|done|skip|set|escalate|status|list|resume|finish) c=$1; shift; "cmd_$c" "$@";;
+  init|next|done|skip|set|escalate|status|list|resume|finish|report) c=$1; shift; "cmd_$c" "$@";;
   *) cat <<EOF
 usage: craftman-state <command>
   init <run-id> [--profile full|lite] [--from STAGE] [--to STAGE] [--skip-deploy] [--max-agent-calls N] [--requirement TEXT]
@@ -157,6 +164,7 @@ usage: craftman-state <command>
   set branch|packages_done <value>
   escalate <text>            log an escalation
   status [run-id] | list | resume <run-id> | finish [complete|aborted]
+  report [run-id]            write report.html (status, design, results) and print its path
 stages: $STAGES
 EOF
   exit 1;;

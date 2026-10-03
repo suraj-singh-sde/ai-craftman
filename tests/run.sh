@@ -27,10 +27,12 @@ craftman-state next | grep -q 'next: requirements' && ok "next=requirements" || 
 craftman-state done requirements >/dev/null; craftman-state next | grep -q 'next: clarifications' && ok "done advances" || bad "done advances"
 grep -q '^- \[x\] requirements  (done .*, took [0-9]*m[0-9]*s)' "$S" && ok "step duration recorded" || bad "step duration recorded"
 grep -q '^- \[-\] security-review  (skipped: lite profile)' "$S" && ok "lite skips security-review" || bad "lite skips security-review"
+grep -q '^- \[-\] design  (skipped: lite profile)' "$S" && ok "lite skips LLD" || bad "lite skips LLD"
 craftman-state done nope >/dev/null 2>&1 && bad "unknown step rejected" || ok "unknown step rejected"
 craftman-state init r1 >/dev/null 2>&1 && bad "duplicate init rejected" || ok "duplicate init rejected"
 craftman-state init r2 --from qa --to qa >/dev/null
 grep -q '^- \[-\] architecture  (skipped: before --from qa)' "$CLAUDE_PROJECT_DIR/.craftman/memory/r2/state.md" && ok "--from" || bad "--from"
+grep -A2 'approve-architecture' "$CLAUDE_PROJECT_DIR/.craftman/memory/r2/state.md" | grep -q 'gov-design' && ok "LLD after HLD approval" || bad "LLD after HLD approval"
 grep -q '^- \[-\] delivery  (skipped: after --to qa)' "$CLAUDE_PROJECT_DIR/.craftman/memory/r2/state.md" && ok "--to" || bad "--to"
 craftman-state resume r1 >/dev/null
 
@@ -88,9 +90,22 @@ for a in "$HERE"/agents/*.md; do
 done
 ok "agents carry output contract"
 
+# every skill an agent preloads ships with the plugin
+for s in $(sed -n 's/^  - ai-craftman://p' "$HERE"/agents/*.md | sort -u); do
+  [ -f "$HERE/skills/$s/SKILL.md" ] || bad "missing skill $s"
+done
+ok "agent skills exist"
+
 craftman-state finish >/dev/null; [ -f "$CLAUDE_PROJECT_DIR/.craftman/active-run" ] && bad "finish clears active" || ok "finish clears active"
 grep -q '^duration: [0-9]*m[0-9]*s$' "$S" && ok "run duration recorded" || bad "run duration recorded"
 grep -q '^- r1 | complete |' "$CLAUDE_PROJECT_DIR/.craftman/memory/index.md" && ok "index updated" || bad "index updated"
+
+# report: written on every state change, read-only, no document can break out of its script tag
+RP="$CLAUDE_PROJECT_DIR/.craftman/memory/r1/report.html"
+[ -f "$RP" ] && grep -q '"step": "requirements"' "$RP" && ok "report refreshed" || bad "report refreshed"
+printf -- '---\nagent: architect\nstatus: done\n---\n</script><script>alert(1)</script>\n' > "$CLAUDE_PROJECT_DIR/.craftman/memory/r1/06-hld.md"
+craftman-state report r1 >/dev/null
+grep -q '"path": "06-hld.md"' "$RP" && ! grep -q '</script><script>alert' "$RP" && ok "report embeds design safely" || bad "report embeds design safely"
 
 rm -rf "$CLAUDE_PROJECT_DIR"
 [ $fail = 0 ] && echo "ALL PASSED" || { echo "FAILURES"; exit 1; }

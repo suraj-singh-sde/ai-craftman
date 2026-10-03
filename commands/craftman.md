@@ -1,5 +1,5 @@
 ---
-description: Run the AI-Craftman SDLC pipeline (requirements → architecture → engineering → QA → DevOps) on a requirement.
+description: Run the AI-Craftman SDLC pipeline (requirements → HLD → LLD → engineering → QA → DevOps) on a requirement.
 argument-hint: "[--profile full|lite] [--from STAGE] [--to STAGE] [--skip-deploy] <requirement text or file path>"
 ---
 
@@ -19,9 +19,9 @@ Arguments: $ARGUMENTS
 3. Run id: `YYYYMMDD-<short-kebab-slug>` (max 40 chars).
 4. Profile: if `--profile` was not given, it is decided automatically after step `requirements` from the planner's `size`: small → `lite`, medium or large → `full`. Don't ask; tell the human in the status line (`profile: lite (size small); rerun with --profile full to change`). Until then initialise with `full`.
 5. `craftman-state init <run-id> --profile <p> [--from S] [--to S] [--skip-deploy] --max-agent-calls ${user_config.max_agent_calls} --requirement "<first 100 chars>"`
-   If the profile changes to lite after step 4, record it: `craftman-state skip <step> "lite profile"` for `gov-requirements approve-architecture work-plan tracker-issues security-review`.
+   If the profile changes to lite after step 4, record it: `craftman-state skip <step> "lite profile"` for `gov-requirements approve-architecture design gov-design work-plan tracker-issues security-review`.
 6. If `craftman-state init` could not run (no Bash access, script missing, error), STOP and tell the human. Never run the pipeline without state: the approvals and budget hooks depend on it.
-7. Create one task-list item per pending step shown in `.craftman/memory/<run-id>/state.md`, so progress is visible and nothing is skipped.
+7. Create one task-list item per pending step shown in `.craftman/memory/<run-id>/state.md`, so progress is visible and nothing is skipped. Tell the human once: `Live report: .craftman/memory/<run-id>/report.html` (open it in a browser; `craftman-state` refreshes it after every step, and the page reloads itself while the run is in progress).
 
 ## 1. The loop
 
@@ -51,12 +51,12 @@ Never mark a step done whose agent returned `status: blocked`, `needs_input` or 
   - `context-memory` runs alongside `architecture` (the architect reads `R/04-context.md`, not the curated memory).
   - `security-review`, `qa` and `docs` all read the committed branch, so dispatch them together. Handle security and QA findings together (fixes go through the engineering fix loop, then both re-check). Re-dispatch docs only if a fix changed a public contract. Mark each step done when it passes.
   - Independent packages run in parallel (see engineering).
-- **Questions before engineering.** All human questions are asked in clarifications, architecture or work-plan. Engineering agents never stop to ask; they record `## Assumptions` and carry on. Collect every package's assumptions for the summary and the PR body. Only an agent that returns `status: blocked` needs a liaison round during engineering.
+- **Questions before engineering.** All human questions are asked in clarifications, architecture, design or work-plan. Engineering agents never stop to ask; they record `## Assumptions` and carry on. Collect every package's assumptions for the summary and the PR body. Only an agent that returns `status: blocked` needs a liaison round during engineering.
 - **Escalations.** Any retry limit hit, agent disagreement or blocked agent: `craftman-state escalate "<text>"`, then the liaison.
 
 ## 3. Steps
 
-`R` = `.craftman/memory/<run-id>`. `SD` = `${CLAUDE_PLUGIN_ROOT}/templates/standards`. `STD` = the standards files named in the context header (`SD/general.md` plus the stack file). Pass `STD` to architect, test-writer, code-writer, code-optimizer, code-reviewer and qa-engineer.
+`R` = `.craftman/memory/<run-id>`. `SD` = `${CLAUDE_PLUGIN_ROOT}/templates/standards`. `ARCH` = the design paths: `R/06-hld.md`, plus `R/08a-lld.md` once it exists (in the lite profile the HLD file holds both). Wherever an agent's input says "architecture path", pass `ARCH`. `STD` = the standards files named in the context header (`SD/general.md` plus the stack file). Pass `STD` to architect, test-writer, code-writer, code-optimizer, code-reviewer and qa-engineer.
 
 ### Stage 1 — Requirements and planning
 - **requirements**: `requirements-planner`, out `R/01-requirements.md`.
@@ -69,9 +69,11 @@ Never mark a step done whose agent returned `status: blocked`, `needs_input` or 
 - **context-memory**: `memory-keeper` with `R/04-context.md` (and `R/05-legacy.md`). It saves `.craftman/context/enterprise.md` and `.craftman/context/flows/<name>.md` for future runs. Dispatch it in the same message as the architect and don't wait for it before architecture.
 
 ### Stage 3 — Architecture and design
-- **architecture**: `architect` with requirements, context, legacy paths; `depth: lite` in the lite profile. Out `R/06-architecture.md`.
-- **gov-architecture**: `governance` gate `architecture`, out `R/07-gov-architecture.md`.
-- **approve-architecture**: `human-oversight` gate `architecture`, out `R/08-oversight-architecture.md`.
+- **architecture** (HLD): `architect` with `level: hld`, requirements, context, legacy paths. Out `R/06-hld.md`. In the lite profile pass `level: combined` instead: one short document with the HLD and LLD sections.
+- **gov-architecture**: `governance` gate `architecture` on `R/06-hld.md`, out `R/07-gov-architecture.md`. In the lite profile (combined design) pass gates `architecture` and `design` together.
+- **approve-architecture**: `human-oversight` gate `architecture` on the HLD, out `R/08-oversight-architecture.md`. The human approves the big decisions before any detail is written.
+- **design** (LLD): a fresh `architect` with `level: lld`, the approved `R/06-hld.md`, requirements, context and `STD`. Out `R/08a-lld.md`. Its open questions go to the liaison now. If it needs to change an HLD decision, that is an open question, not a silent change; an approved change goes back through approve-architecture.
+- **gov-design**: `governance` gate `design` on `R/06-hld.md` and `R/08a-lld.md`, out `R/08b-gov-design.md`.
 - **work-plan**: `workflow-coordinator`, out `R/09-work-plan.md`. Its open questions go to the liaison now, before engineering. In the lite profile (step skipped) treat the whole change as one package `WP-1` with `size: S`.
 - **tracker-issues**: ask the human through the liaison whether to create tracker issues for the packages (GitHub via `gh issue create`, or Jira via a connected MCP server, or none). Creating needs `[APPROVAL:tracker]`. Record issue links in `R/09-work-plan.md` via the coordinator's draft section, or skip with reason.
 

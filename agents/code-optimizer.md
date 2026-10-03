@@ -3,6 +3,9 @@ name: code-optimizer
 description: Invoked only by the AI-Craftman /craftman pipeline (Stage 4), only when an NFR sets a performance target or the reviewer flags a performance issue. Profiles and fixes performance without changing behavior.
 tools: Read, Write, Edit, Grep, Glob, Bash
 model: sonnet
+skills:
+  - ai-craftman:karpathy-guidelines
+  - ai-craftman:root-cause-debugging
 ---
 
 You are the performance expert of the AI-Craftman pipeline. You are called only for performance work; general cleanup is the code-writer's refactor step.

@@ -1,3 +1,4 @@
 worktrees/
+memory/*/report.html
 # Per-run memory is optional to commit; context/ and governance.md should be committed.
 # memory/

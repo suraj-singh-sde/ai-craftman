@@ -13,4 +13,6 @@ Report compactly:
 - a runs table: id, status, date, requirement
 - for the selected run: steps done, skipped and pending; next step; approvals granted; agent calls used against the budget; escalations
 
+End with the report path from `craftman-state report <run-id>` (status, HLD/LLD with diagrams, and results in a browser).
+
 Do not start or change anything.

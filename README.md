@@ -49,7 +49,7 @@ Requirements:
 | `/ai-craftman:craftman-resume <run-id>` | Continues an interrupted run from its last completed step |
 
 Flags for `craftman`:
-- `--profile full|lite`: without the flag, small changes run `lite` and medium or large ones run `full`. `lite` skips the requirements governance gate, architecture approval, work-package split, tracker issues and the separate security review (the code reviewer does a security-focused review instead)
+- `--profile full|lite`: without the flag, small changes run `lite` and medium or large ones run `full`. `lite` skips the requirements governance gate, architecture approval, the separate LLD pass (one combined design instead), work-package split, tracker issues and the separate security review (the code reviewer does a security-focused review instead)
 - `--from STAGE` / `--to STAGE`: stages are `requirements context architecture engineering qa devops`
 - `--skip-deploy`
 
@@ -66,7 +66,11 @@ Flags for `craftman`:
    - It detects the stack and either finds the existing flow or designs a new one.
    - Brownfield code gets **legacy-analyst**.
    - **memory-keeper** saves the flow under `context/flows/` for future runs.
-3. **Architecture.** **architect** designs, followed by a **governance** gate and a **human-oversight** gate (risk-based). **workflow-coordinator** splits the work into packages across teams and systems, and optionally creates GitHub or Jira issues.
+3. **Architecture: HLD, then LLD.**
+   - **HLD**: **architect** decides components, data stores, integrations, libraries and the key ADRs. A **governance** gate and a **human-oversight** gate (risk-based) follow, so you approve the big decisions before any detail is written.
+   - **LLD**: a fresh **architect** turns the approved HLD into the project structure, interfaces and schemas, error model, data model, and every limit and setting. A **governance** `design` gate checks it against the HLD and the standards. Changing an HLD decision needs a new approval.
+   - The lite profile writes one short combined design instead.
+   - **workflow-coordinator** splits the work into packages across teams and systems, and optionally creates GitHub or Jira issues.
 4. **Engineering.** Work happens on branch `craftman/<run-id>`. A skeleton package (structure, wiring, error model, schema, interfaces) comes first; the feature slices then run **in parallel** in git worktrees. Each package goes through:
    - small and medium packages: **tdd-engineer** writes failing tests, records the red run, then writes the code and refactors, in one context
    - large or security-sensitive packages: **test-writer** (red, re-run by the orchestrator to confirm), then **code-writer** (green, refactor), with test files locked against the code-writer
@@ -88,6 +92,15 @@ Flags for `craftman`:
 
 Any agent can tag an open question `[research]` when documentation or the web can answer it (a library API, the current version, a standard, a known issue). The orchestrator sends those to **research-agent**, which searches the web, checks the primary source and writes cited answers to `research/<step>.md`, instead of asking you. Earlier answers are reused across runs. Whatever it can't settle goes to you as a normal question.
 
+## Run report (UI)
+
+Every run has a live page at `.craftman/memory/<run-id>/report.html`. Open it in a browser:
+- **Status**: progress, next step, agent calls against the budget, every step with its duration, the slowest steps, approvals, answers and escalations
+- **Design**: the HLD and LLD with their mermaid diagrams, plus the governance, oversight and work-plan results
+- **Results**: package reviews, security, QA, docs, release gate, research and the summary, each with its verdict
+
+`craftman-state` rebuilds it after every step, and the page reloads itself while the run is in progress. `craftman-state report [run-id]` rebuilds it on demand. It is read-only: approvals stay in the terminal, where the hooks check them. Markdown and diagrams render with marked, DOMPurify and mermaid from jsDelivr (pinned versions, with integrity hashes). Offline, documents show as plain text. Agent output is sanitized before it is shown.
+
 ## Agents
 
 | Role | Agent |
@@ -104,6 +117,15 @@ Any agent can tag an open question `[research]` when documentation or the web ca
 | Stage specialists | `requirements-planner`, `architect`, `tdd-engineer`, `test-writer`, `code-writer`, `code-optimizer`, `code-reviewer`, `qa-engineer`, `doc-writer`, `devops-engineer`, `operations-engineer` |
 
 The orchestration layer is a command rather than an agent because Claude Code subagents cannot dispatch other subagents or talk to the user. For the same reason, `human-liaison` writes the questions and the orchestrator relays them word for word.
+
+## Skills
+
+Engineering agents preload these skills (`skills:` in their frontmatter), and you can invoke them yourself as `/ai-craftman:<name>`:
+
+| Skill | What it adds | Preloaded by |
+|---|---|---|
+| `karpathy-guidelines` | Think before coding, simplicity first, surgical changes, goal-driven execution. From [andrej-karpathy-skills](https://github.com/multica-ai/andrej-karpathy-skills) (MIT). | architect, tdd-engineer, test-writer, code-writer, code-optimizer, code-reviewer |
+| `root-cause-debugging` | Reproduce, explain, fix once where every caller routes through; never weaken a test; stop after three failed fixes. | tdd-engineer, code-writer, code-optimizer, qa-engineer |
 
 ## Engineering standards
 

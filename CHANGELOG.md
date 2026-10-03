@@ -2,6 +2,19 @@
 
 All notable changes to this project are documented here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
+## [0.6.0] - 2026-10-03
+
+### Added
+- Skills, preloaded into engineering agents through `skills:` frontmatter:
+  - `karpathy-guidelines` from [andrej-karpathy-skills](https://github.com/multica-ai/andrej-karpathy-skills) (MIT), with a note mapping "ask" to open questions and assumptions in the pipeline.
+  - `root-cause-debugging`, used for fix loops after test, review and QA failures.
+- A self-check that every skill an agent preloads exists in `skills/`.
+- Run report: `.craftman/memory/<run-id>/report.html` with Status, Design (HLD/LLD with mermaid diagrams) and Results tabs. `craftman-state` refreshes it after every step; `craftman-state report [run-id]` rebuilds it on demand. It is read-only and sanitizes agent output.
+
+### Changed
+- Architecture is split into HLD and LLD. The architect writes the HLD (`06-hld.md`: components, data stores, integrations, libraries, ADRs), which passes the governance and human approval gates. A fresh architect then writes the LLD (`08a-lld.md`: structure, contracts, error model, data model, limits), checked by a new governance `design` gate (`08b-gov-design.md`). The lite profile writes one combined design.
+- code-reviewer: changes outside the work package and speculative code are medium findings.
+
 ## [0.5.0] - 2026-10-01
 
 Faster runs. In v2, engineering took 62% of a 2-hour run, with three packages built one after another.
