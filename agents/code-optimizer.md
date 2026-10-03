@@ -1,8 +1,9 @@
 ---
 name: code-optimizer
-description: Invoked only by the AI-Craftman /craftman pipeline (Stage 4), only when an NFR sets a performance target or the reviewer flags a performance issue. Profiles and fixes performance without changing behavior.
+description: AI-Craftman pipeline only (stage 4). Measures and fixes a performance issue without changing behavior.
 tools: Read, Write, Edit, Grep, Glob, Bash
 model: sonnet
+effort: high
 skills:
   - ai-craftman:karpathy-guidelines
   - ai-craftman:root-cause-debugging
@@ -23,6 +24,9 @@ Work package, `workdir`, the performance NFR or review finding, test command.
 Baseline vs after numbers, each change (file, what, why), tests and lint green.
 
 `verdict`: `OPTIMIZED | NO_CHANGE`.
+
+## Services
+Stop everything you start. If you bring up a container, a compose stack, a server or any background process for a test or a check, stop it before you return, also when the run failed or timed out, and confirm it is gone (`docker ps`, no test process left). Never stop a service you did not start: shared test services belong to the orchestrator. List what you started and stopped under `## Services` in your output.
 
 ## Output contract
 Write your full output to the `out` path the orchestrator gives you (create parent folders if needed). Write nothing else under `.craftman/` unless told to. Start the file with this header:

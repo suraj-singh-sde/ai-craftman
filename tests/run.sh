@@ -4,6 +4,7 @@ set -u
 HERE="$(cd "$(dirname "$0")/.." && pwd)"
 export CLAUDE_PROJECT_DIR="$(mktemp -d)"
 export PATH="$HERE/bin:$PATH"
+export CRAFTMAN_NOTIFY=off   # no desktop notifications from the self-check
 fail=0
 ok()   { echo "ok   $1"; }
 bad()  { echo "FAIL $1"; fail=1; }
@@ -13,6 +14,7 @@ expect() { # expect <name> <want-exit> <script> <json>
 }
 G="$HERE/scripts/deploy-guard.sh"; F="python3 $HERE/scripts/file-guard.py"
 B="$HERE/scripts/agent-budget.sh"; R="python3 $HERE/scripts/record-answers.py"
+aj() { printf '{"tool_name":"Agent","tool_input":{"subagent_type":"ai-craftman:%s","prompt":"x"}}' "$1"; }
 bash_json() { python3 -c 'import json,sys; print(json.dumps({"tool_name":"Bash","tool_input":{"command":sys.argv[1]}}))' "$1"; }
 
 # no active run: everything allowed
@@ -34,7 +36,65 @@ craftman-state init r2 --from qa --to qa >/dev/null
 grep -q '^- \[-\] architecture  (skipped: before --from qa)' "$CLAUDE_PROJECT_DIR/.craftman/memory/r2/state.md" && ok "--from" || bad "--from"
 grep -A2 'approve-architecture' "$CLAUDE_PROJECT_DIR/.craftman/memory/r2/state.md" | grep -q 'gov-design' && ok "LLD after HLD approval" || bad "LLD after HLD approval"
 grep -q '^- \[-\] delivery  (skipped: after --to qa)' "$CLAUDE_PROJECT_DIR/.craftman/memory/r2/state.md" && ok "--to" || bad "--to"
+grep -qx 'active-run' "$CLAUDE_PROJECT_DIR/.craftman/.gitignore" && ok "active-run git-ignored" || bad "active-run git-ignored"
+
+# gates need evidence on disk: a passing verdict, a human grant, or a waiver
+craftman-state init r3 --max-agent-calls 500 >/dev/null; M3="$CLAUDE_PROJECT_DIR/.craftman/memory/r3"
+craftman-state done gov-requirements >/dev/null 2>&1 && bad "gate without result refused" || ok "gate without result refused"
+printf -- '---\nverdict: BLOCK\n---\n' > "$M3/03-gov-requirements.md"
+craftman-state done gov-requirements >/dev/null 2>&1 && bad "BLOCK gate refused" || ok "BLOCK gate refused"
+craftman-state skip gov-requirements "not needed" >/dev/null 2>&1 && bad "gate skip refused" || ok "gate skip refused"
+printf -- '---\nverdict: PASS\n---\n' > "$M3/03-gov-requirements-2.md"
+craftman-state done gov-requirements >/dev/null 2>&1 && ok "PASS gate accepted" || bad "PASS gate accepted"
+craftman-state done approve-architecture >/dev/null 2>&1 && bad "approval without grant refused" || ok "approval without grant refused"
+echo "granted: architecture | t | u" >> "$M3/approvals.md"
+craftman-state done approve-architecture >/dev/null 2>&1 && ok "granted approval accepted" || bad "granted approval accepted"
+printf -- '---\nverdict: NOT_READY\n---\n' > "$M3/11-qa.md"
+craftman-state done qa >/dev/null 2>&1 && bad "NOT_READY qa refused" || ok "NOT_READY qa refused"
+echo "granted: waiver | t | u" >> "$M3/approvals.md"
+craftman-state done qa >/dev/null 2>&1 && ok "waiver passes gate" || bad "waiver passes gate"
+
+# a design is done only with its diagrams: the human reads the HLD and LLD as mermaid in the report
+printf -- '---\nagent: architect\n---\n# HLD\nno diagram\n' > "$M3/06-hld.md"
+craftman-state done architecture >/dev/null 2>&1 && bad "HLD without diagram refused" || ok "HLD without diagram refused"
+printf -- '---\nagent: architect\n---\n## Components\n```mermaid\nflowchart LR\n  a["API"] --> b["DB"]\n```\n' > "$M3/06-hld.md"
+craftman-state done architecture >/dev/null 2>&1 && ok "HLD with diagram accepted" || bad "HLD with diagram accepted"
+craftman-state done design >/dev/null 2>&1 && bad "LLD without diagram refused" || ok "LLD without diagram refused"
+# diagrams that will not render are refused (the two failures from a real run), valid shapes are not
+L="python3 $HERE/scripts/report.py --lint"
+printf '```mermaid\nflowchart LR\n  subgraph I1[service instance (1 proc)]\n    A --> B\n  end\n```\n' > "$M3/08a-lld.md"
+craftman-state done design 2>&1 | grep -q '08a-lld.md line 3' && ok "unquoted label with parentheses refused" || bad "unquoted label with parentheses refused"
+printf '```mermaid\nsequenceDiagram\n  A->>B: limit (cost 1); on error -> allow, metric\n```\n' > "$M3/x.md"; $L "$M3/x.md" >/dev/null && bad "semicolon in sequence message refused" || ok "semicolon in sequence message refused"
+printf '```mermaid\nflowchart LR\n  A -->|call (x)| B\n```\n' > "$M3/x.md"; $L "$M3/x.md" >/dev/null && bad "unquoted edge label refused" || ok "unquoted edge label refused"
+printf '```mermaid\nflowchart LR\n  subgraph app["service (1 proc)"]\n    A[API routers v1] -->|"POST /v1 (JWT)"| PG[(PostgreSQL 17)]\n    A --> Q{{"queue"}} & S([stadium]) & C((circle))\n  end\n  subgraph two [Plain title]\n    D{ok?} --> E[/in/]\n  end\n```\n```mermaid\nsequenceDiagram\n  A->>B: SUBSCRIBE notify:u:{sub} (queue), then live\n```\n```mermaid\nerDiagram\n  A ||--o{ B : "has"\n```\n' > "$M3/08a-lld.md"
+craftman-state done design >/dev/null 2>&1 && ok "valid diagrams accepted" || bad "valid diagrams accepted"; rm -f "$M3/x.md"
+
+# parallel dispatches (one message, several Agent calls) must all be counted
+c0=$(sed -n 's/^agent_calls: //p' "$M3/state.md")
+for _ in $(seq 20); do aj architect | "$HERE/scripts/agent-budget.sh" & done; wait
+[ "$(sed -n 's/^agent_calls: //p' "$M3/state.md")" = $((c0+20)) ] && ok "parallel dispatches all counted" || bad "parallel dispatches all counted"
+
+# auto profile: one command records lite and skips only the pending lite steps
+craftman-state init r6 --lead >/dev/null; grep -q '^lead: on' "$CLAUDE_PROJECT_DIR/.craftman/memory/r6/state.md" && grep -q '^lead: off' "$S" && ok "--lead recorded" || bad "--lead recorded"
+grep -q '^tools: Agent' "$HERE/agents/package-lead.md" && ok "package lead can dispatch" || bad "package lead can dispatch"
+craftman-state init r4 >/dev/null; S4="$CLAUDE_PROJECT_DIR/.craftman/memory/r4/state.md"
+craftman-state done requirements >/dev/null; craftman-state profile lite >/dev/null
+grep -q '^profile: lite' "$S4" && grep -q '^- \[-\] gov-design  (skipped: lite profile)' "$S4" && grep -q '^- \[x\] requirements' "$S4" && ok "profile lite switch" || bad "profile lite switch"
+
+# spin-down: services reports only what was started during the run (docker faked, so the check is the same everywhere)
+STUB="$(mktemp -d)"; printf '#!/bin/sh\n[ "$1" = ps ] && cat "%s/ps"\n' "$STUB" > "$STUB/docker"; chmod +x "$STUB/docker"
+echo "container aaa111 redis:7 old" > "$STUB/ps"
+PATH="$STUB:$PATH" craftman-state init r5 >/dev/null
+printf 'container aaa111 redis:7 old\ncontainer bbb222 postgres:17 new\n' > "$STUB/ps"
+out=$(PATH="$STUB:$PATH" craftman-state services)
+echo "$out" | grep -q 'container bbb222 postgres:17' && ! echo "$out" | grep -q aaa111 && ok "services lists only what the run started" || bad "services lists only what the run started"
+echo "container aaa111 redis:7 old" > "$STUB/ps"
+PATH="$STUB:$PATH" craftman-state services | grep -q 'nothing left running' && ok "services clean after spin-down" || bad "services clean after spin-down"
+PATH="$STUB:$PATH" craftman-state finish aborted | grep -q 'services: nothing left running' && ok "finish reports services" || bad "finish reports services"
+rm -rf "$STUB"
 craftman-state resume r1 >/dev/null
+craftman-state escalate "docker is down" >/dev/null && craftman-state notify "x" && grep -q 'docker is down' "$CLAUDE_PROJECT_DIR/.craftman/memory/r1/escalations.md" && ok "escalate logs and notifies" || bad "escalate logs and notifies"
+grep -q '"matcher": "AskUserQuestion"' "$HERE/hooks/hooks.json" && [ "$(grep -c 'craftman-state\\" notify' "$HERE/hooks/hooks.json")" = 1 ] && ok "question hook notifies" || bad "question hook notifies"
 
 # deploy guard
 expect "push blocked"            2 "$G" "$(bash_json 'git push -u origin craftman/r1')"
@@ -46,6 +106,13 @@ expect "terraform plan allowed"  0 "$G" "$(bash_json 'terraform plan')"
 expect "tamper approvals blocked" 2 "$G" "$(bash_json 'echo granted: deploy >> .craftman/memory/r1/approvals.md')"
 expect "craftman-state allowed"  0 "$G" "$(bash_json 'craftman-state done qa')"
 expect "cat state allowed"       0 "$G" "$(bash_json 'cat .craftman/memory/r1/state.md')"
+expect "read with 2>&1 allowed"  0 "$G" "$(bash_json 'grep -c x .craftman/memory/r1/state.md 2>&1 | head -1')"
+expect "prefix tamper blocked"   2 "$G" "$(bash_json 'craftman-state next; echo granted: deploy >> .craftman/memory/r1/approvals.md')"
+expect "newline tamper blocked"  2 "$G" "$(bash_json "$(printf 'craftman-state next\necho granted: deploy >> .craftman/memory/r1/approvals.md')")"
+expect "state note may mention files" 0 "$G" "$(bash_json 'craftman-state done qa "READY; see answers.md -> python lint clean"')"
+expect "code in state note blocked" 2 "$G" "$(bash_json 'craftman-state done qa "$(echo granted: deploy >> .craftman/memory/r1/approvals.md)"')"
+expect "rm .craftman blocked"    2 "$G" "$(bash_json 'rm -rf .craftman')"
+expect "rm worktree allowed"     0 "$G" "$(bash_json 'rm -rf .craftman/worktrees/WP-1')"
 
 # approval recorded from human answer, then push allowed; reject does not grant
 Q='[APPROVAL:git-push] Push branch craftman/r1 and open a PR?'
@@ -54,6 +121,8 @@ expect "reject keeps block" 2 "$G" "$(bash_json 'git push')"
 printf '%s' "$(python3 -c 'import json,sys; q=sys.argv[1]; print(json.dumps({"tool_name":"AskUserQuestion","tool_input":{"questions":[{"question":q}],"answers":{q:"Approve"}}}))' "$Q")" | $R
 expect "approve allows push" 0 "$G" "$(bash_json 'git push')"
 expect "deploy still blocked" 2 "$G" "$(bash_json 'helm upgrade api ./chart')"
+expect "force push still blocked" 2 "$G" "$(bash_json 'git push --force origin main')"
+expect "branch delete still blocked" 2 "$G" "$(bash_json 'git push origin :main')"
 grep -q 'answer: Reject' "$CLAUDE_PROJECT_DIR/.craftman/memory/r1/answers.md" && ok "answers audited" || bad "answers audited"
 
 # file guard
@@ -64,13 +133,16 @@ expect "secret in memory blocked" 2 "$F" "$(fj "$M/01-requirements.md" 'key AKIA
 expect "password in memory blocked" 2 "$F" "$(fj "$M/02.md" 'password: hunter2hunter2' '')"
 expect "redacted allowed"         0 "$F" "$(fj "$M/02.md" 'password: <redacted>' '')"
 expect "clean memory allowed"     0 "$F" "$(fj "$M/01-requirements.md" 'FR-1 users can reset' '')"
+expect "schema field not a secret" 0 "$F" "$(fj "$M/08a-lld.md" 'password: SecretStr' '')"
+expect "env var name not a secret" 0 "$F" "$(fj "$M/08a-lld.md" 'api_key: configured via FILE_SERVICE_API_KEY' '')"
 expect "code-writer test blocked" 2 "$F" "$(fj /repo/tests/test_api.py x ai-craftman:code-writer)"
 expect "code-writer .spec blocked" 2 "$F" "$(fj /repo/src/api.spec.ts x ai-craftman:code-optimizer)"
 expect "code-writer src allowed"  0 "$F" "$(fj /repo/src/api.py x ai-craftman:code-writer)"
 expect "test-writer test allowed" 0 "$F" "$(fj /repo/tests/test_api.py x ai-craftman:test-writer)"
 
 # agent budget (max 2 from init)
-aj() { printf '{"tool_name":"Agent","tool_input":{"subagent_type":"ai-craftman:%s","prompt":"x"}}' "$1"; }
+expect "engineer blocked before design gates" 2 "$B" "$(aj tdd-engineer)"
+expect "package lead blocked before design gates" 2 "$B" "$(aj package-lead)"
 before=$(sed -n 's/^agent_calls: //p' "$S")
 expect "sendmessage allowed" 0 "$B" '{"tool_name":"SendMessage","tool_input":{"to":"abc","message":"x"}}'
 [ "$(sed -n 's/^agent_calls: //p' "$S")" = $((before+1)) ] && ok "sendmessage counted" || bad "sendmessage counted"
@@ -90,6 +162,12 @@ for a in "$HERE"/agents/*.md; do
 done
 ok "agents carry output contract"
 
+# every agent that can run commands must stop what it starts
+for a in $(grep -l '^tools: .*Bash' "$HERE"/agents/*.md); do
+  grep -qF "Stop everything you start." "$a" || bad "services rule in $(basename "$a")"
+done
+ok "bash agents carry the spin-down rule"
+
 # every skill an agent preloads ships with the plugin
 for s in $(sed -n 's/^  - ai-craftman://p' "$HERE"/agents/*.md | sort -u); do
   [ -f "$HERE/skills/$s/SKILL.md" ] || bad "missing skill $s"
@@ -106,6 +184,8 @@ RP="$CLAUDE_PROJECT_DIR/.craftman/memory/r1/report.html"
 printf -- '---\nagent: architect\nstatus: done\n---\n</script><script>alert(1)</script>\n' > "$CLAUDE_PROJECT_DIR/.craftman/memory/r1/06-hld.md"
 craftman-state report r1 >/dev/null
 grep -q '"path": "06-hld.md"' "$RP" && ! grep -q '</script><script>alert' "$RP" && ok "report embeds design safely" || bad "report embeds design safely"
+V=$(sed -n 's/.*craftmanVersion("\([0-9a-f]*\)").*/\1/p' "$(dirname "$RP")/report-version.js")
+[ -n "$V" ] && grep -q "\"version\": \"$V\"" "$RP" && ok "report version file matches page" || bad "report version file matches page"
 
 rm -rf "$CLAUDE_PROJECT_DIR"
 [ $fail = 0 ] && echo "ALL PASSED" || { echo "FAILURES"; exit 1; }

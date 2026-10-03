@@ -17,14 +17,23 @@ cmd=$(printf '%s' "$input" | python3 -c 'import sys,json; print(json.load(sys.st
 block() { echo "AI-Craftman: blocked. $1" >&2; exit 2; }
 
 # Control files are written only by craftman-state and the hooks.
-if printf '%s' "$cmd" | grep -Eq '(state|approvals|answers)\.md|active-run' \
-   && printf '%s' "$cmd" | grep -Eq '(>|tee |sed -i|perl -i|python|node |ruby |cp |mv |rm |truncate|dd )' \
-   && ! printf '%s' "$cmd" | grep -Eq '^[[:space:]]*craftman-state '; then
+# One line, with harmless redirects (2>&1, >/dev/null) removed, so reads are not mistaken for writes.
+bare=$(printf '%s' "$cmd" | tr '\n' ';' | sed -E 's/[0-9]?>&[0-9-]//g; s#[0-9&]?>[[:space:]]*/dev/null##g')
+# The only exemption is a lone craftman-state call: nothing chained, piped or redirected after it.
+# Its quoted note may say anything, unless the quotes can run code ($ or a backtick inside double quotes).
+if printf '%s' "$bare" | grep -Eq '(state|approvals|answers)\.md|active-run' \
+   && printf '%s' "$bare" | grep -Eq '(>|tee |sed -i|perl -i|python|node |ruby |cp |mv |rm |truncate|dd )' \
+   && ! printf '%s' "$bare" | sed -E 's/"[^"$`]*"//g; s/'"'[^']*'"'//g' | grep -Eq '^[[:space:]]*craftman-state [^;&|`$>]*$'; then
   block "Run control files (state.md, approvals.md, answers.md, active-run) may only change through craftman-state or the human's answers."
+fi
+# Deleting .craftman (worktrees aside) would erase the audit trail and switch these guards off.
+if printf '%s' "$bare" | sed 's#\.craftman/worktrees##g' | grep -Eq '(^|[;&|[:space:]])rm [^;&|]*\.craftman'; then
+  block "Run memory under .craftman/ may not be deleted during a run. Finish the run first (craftman-state finish)."
 fi
 
 category=""
-if printf '%s' "$cmd" | grep -Eq '(terraform|tofu|pulumi)[^|;&]* destroy|kubectl[^|;&]* delete|helm[^|;&]* uninstall|aws cloudformation delete-stack'; then category=destroy
+# A git-push grant covers a plain push only: forced pushes and remote branch deletes count as destroy.
+if printf '%s' "$cmd" | grep -Eq '(terraform|tofu|pulumi)[^|;&]* destroy|kubectl[^|;&]* delete|helm[^|;&]* uninstall|aws cloudformation delete-stack|git[^|;&]* push[^|;&]*( --force| -f( |$)| --delete| -d( |$)| --mirror| \+[A-Za-z]| :[A-Za-z])'; then category=destroy
 elif printf '%s' "$cmd" | grep -Eq '(terraform|tofu)[^|;&]* apply|pulumi[^|;&]* up|kubectl[^|;&]* (apply|create|replace|patch|rollout|scale|set) |helm[^|;&]* (install|upgrade|rollback)|(cdk|sam|serverless|sls|eb|fly|firebase|wrangler)[^|;&]* (deploy|publish)|aws cloudformation (deploy|create-stack|update-stack)|aws ecs update-service|aws lambda update-function|gcloud[^|;&]* deploy|az[^|;&]* deployment|az webapp deploy|vercel[^|;&]*--prod|netlify deploy[^|;&]*--prod|ansible-playbook|docker[^|;&]* push|git push heroku'; then category=deploy
 elif printf '%s' "$cmd" | grep -Eq '(npm|yarn|pnpm) publish|twine upload|cargo publish|gem push|mvn[^|;&]* deploy|gradle[^|;&]* publish|gh release create'; then category=publish
 elif printf '%s' "$cmd" | grep -Eq 'git[^|;&]* push|gh pr create'; then category=git-push

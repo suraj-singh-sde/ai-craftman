@@ -17,7 +17,9 @@ SECRETS = [
         r"\bxox[abprs]-[A-Za-z0-9-]{10,}",
         r"\bsk-[A-Za-z0-9_-]{20,}",
         r"\bAIza[0-9A-Za-z_-]{35}",
-        r"(?i)\b(password|passwd|secret|api[_-]?key|token)\b\s*[:=]\s*['\"]?(?!<redacted>)[^\s'\"<]{8,}",
+        # keyword = value: the value must mix letters and digits, so schema fields (`password: SecretStr`)
+        # and env var names (`api_key: FILE_SERVICE_API_KEY`) in design docs are not blocked
+        r"(?i)\b(password|passwd|secret|api[_-]?key|token)\b\s*[:=]\s*['\"]?(?=[^\s'\"<()\[\]{}]*[0-9])(?=[^\s'\"<()\[\]{}]*[a-z])[^\s'\"<()\[\]{}]{8,}",
     )
 ]
 TEST_FILE = re.compile(

@@ -17,4 +17,5 @@ license: MIT
 ## Never
 - Edit, skip, loosen or delete a test to make it pass. A wrong test is a finding for whoever owns the tests, with the reason.
 - Catch and ignore the error, add a retry or a sleep, or special-case the failing input to hide it.
+- Rerun a flaky or hanging test in a loop until it passes, or wait on it with an unbounded poll. Run tests with a timeout: a hang or a flake is a failure to explain (shared state, timing, ports, a dead service), not noise.
 - Try more than three fixes for the same failure without a new explanation. After three, stop and report what you tried as `status: blocked`.

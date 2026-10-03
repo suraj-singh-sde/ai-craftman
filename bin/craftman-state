@@ -36,6 +36,14 @@ devops:devops:devops-engineer
 operations:devops:operations-engineer
 summary:finish:memory-keeper"
 LITE_SKIP="gov-requirements approve-architecture design gov-design work-plan tracker-issues security-review"
+# Gates are marked done only with their evidence on disk. step:result-file-prefix:passing-verdict
+GATES="gov-requirements:03-gov-requirements:PASS
+gov-architecture:07-gov-architecture:PASS
+gov-design:08b-gov-design:PASS
+security-review:10-security:PASS
+qa:11-qa:READY
+gov-release:13-gov-release:PASS"
+PROTECTED="gov-requirements gov-architecture approve-architecture gov-design security-review qa gov-release"
 
 die() { echo "craftman-state: $*" >&2; exit 1; }
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -55,16 +63,61 @@ mark() { # mark <state> <step> <char> <note>
   mv "$tmp" "$1"
 }
 
+# One writer at a time for state.md (the hooks update it too). A stale lock is taken over after ~5s.
+LOCK="$ROOT/.craftman/.lock"
+lock() { [ -d "$ROOT/.craftman" ] || return 0; local i=0; until mkdir "$LOCK" 2>/dev/null; do i=$((i+1)); [ "$i" -ge 50 ] && break; sleep 0.1; done; trap 'rmdir "$LOCK" 2>/dev/null' EXIT; }
+# docker with a time limit: a sick daemon can hang for minutes, and a state change must never wait on it
+dock() {
+  command -v docker >/dev/null 2>&1 || return 1
+  docker "$@" 2>/dev/null & local p=$!
+  ( sleep 8; kill "$p" 2>/dev/null ) >/dev/null 2>&1 & local w=$! rc=0
+  wait "$p" 2>/dev/null || rc=$?
+  kill "$w" 2>/dev/null || true
+  return "$rc"
+}
+# Containers, and processes that reference the project path (test runs, dev servers), as "kind id details" lines
+running() {
+  local pids
+  dock ps --format 'container {{.ID}} {{.Image}} {{.Names}}' || echo "docker down"
+  pids=$(pgrep -f "$ROOT/" 2>/dev/null | grep -vx "$$" | paste -sd, - || true)
+  [ -z "$pids" ] || ps -o pid=,command= -p "$pids" 2>/dev/null | sed 's/^ */process /' || true
+}
+design_ok() { # design_ok <dir> <file-prefix> <diagrams>: the design has its mermaid diagrams and they will render
+  grep -qs '^[[:space:]]*```mermaid' "$1/$2"*.md || die "$2.md needs its mermaid diagrams ($3): the human reads the design as diagrams"
+  command -v python3 >/dev/null 2>&1 || return 0
+  local problems; problems=$(python3 "$REPORT" --lint "$1/$2"*.md 2>/dev/null) \
+    || die "$2.md has diagrams that will not render; have the architect fix them in place:"$'\n'"$problems"
+}
+granted() { grep -Eq "^granted: $1( |\$)" "$(dirname "$2")/approvals.md" 2>/dev/null; }   # granted <category> <state-file>
+check_gate() { # check_gate <state-file> <step>: refuse unless the step's evidence exists
+  local dir g prefix want; dir=$(dirname "$1")
+  case "$2" in
+    approve-architecture)
+      granted architecture "$1" || grep -qs '^verdict: NO_APPROVAL_NEEDED' "$dir"/08-oversight-architecture*.md \
+        || die "approve-architecture needs the human's [APPROVAL:architecture] answer (or an oversight verdict NO_APPROVAL_NEEDED)";;
+    approve-deploy) granted deploy "$1" || die "approve-deploy needs the human's [APPROVAL:deploy] answer";;
+    # the human reads the design as diagrams (report, Design tab), so a design without them is not done
+    architecture) design_ok "$dir" 06-hld "block diagram, main flow";;
+    design) design_ok "$dir" 08a-lld "modules, data model, main flows";;
+    *) g=$(echo "$GATES" | grep "^$2:") || return 0
+       prefix=$(echo "$g" | cut -d: -f2); want=$(echo "$g" | cut -d: -f3)
+       ls "$dir/$prefix"*.md >/dev/null 2>&1 || die "$2 has no result file ($prefix*.md); run the gate first"
+       grep -qs "^verdict: $want" "$dir/$prefix"*.md || granted waiver "$1" \
+         || die "$2 needs 'verdict: $want' in $prefix*.md, or a human waiver ([APPROVAL:waiver])";;
+  esac
+}
+
 cmd_init() {
   local run="${1:-}"; shift || true
-  [ -n "$run" ] || die "usage: init <run-id> [--profile full|lite] [--from STAGE] [--to STAGE] [--skip-deploy] [--max-agent-calls N] [--requirement TEXT]"
-  local profile=full from=requirements to=devops skipdeploy=0 max=60 req=""
+  [ -n "$run" ] || die "usage: init <run-id> [--profile full|lite] [--from STAGE] [--to STAGE] [--skip-deploy] [--lead] [--max-agent-calls N] [--requirement TEXT]"
+  local profile=full from=requirements to=devops skipdeploy=0 lead=off max=60 req=""
   while [ $# -gt 0 ]; do
     case "$1" in
       --profile) profile="$2"; shift 2;;
       --from) from="$2"; shift 2;;
       --to) to="$2"; shift 2;;
       --skip-deploy) skipdeploy=1; shift;;
+      --lead) lead=on; shift;;
       --max-agent-calls) max="$2"; shift 2;;
       --requirement) req="$2"; shift 2;;
       *) die "unknown option $1";;
@@ -81,6 +134,7 @@ cmd_init() {
     echo "run: $run"
     echo "requirement: $req"
     echo "profile: $profile"
+    echo "lead: $lead"
     echo "status: in_progress"
     echo "started: $(now)"
     echo "finished: "
@@ -106,6 +160,10 @@ cmd_init() {
   mkdir -p "$MEM"; [ -f "$MEM/index.md" ] || echo "# AI-Craftman runs" > "$MEM/index.md"
   echo "- $run | in_progress | $(now) | ${req:0:100}" >> "$MEM/index.md"
   echo "$run" > "$ACTIVE"
+  # A committed active-run would switch the guards on for everyone who pulls the branch.
+  local p; for p in active-run .lock 'memory/*/report.html' 'memory/*/report-version.js'; do grep -qxF "$p" "$ROOT/.craftman/.gitignore" 2>/dev/null || echo "$p" >> "$ROOT/.craftman/.gitignore"; done
+  # What is already running, so the run can stop exactly what it started and nothing else.
+  running 2>/dev/null | cut -d' ' -f1,2 > "$dir/services-before.txt" || true
   refresh "$dir/state.md"
   echo "initialized $run ($profile, $from..$to$([ $skipdeploy = 1 ] && echo ', skip-deploy'))"
   cmd_next "$run"
@@ -119,19 +177,54 @@ cmd_next() {
   echo "next: $step  stage: $(echo "$line" | cut -d: -f2)  owner: $(echo "$line" | cut -d: -f3)"
 }
 
-cmd_done() { local f; f=$(state_file); mark "$f" "${1:?step}" x "(done $(now), took $(elapsed "$f")) ${2:-}"; put last_mark "$(epoch)" "$f"; refresh "$f"; cmd_next; }
-cmd_skip() { local f; f=$(state_file); mark "$f" "${1:?step}" - "(skipped: ${2:?reason})"; put last_mark "$(epoch)" "$f"; refresh "$f"; cmd_next; }
+cmd_done() { local f; f=$(state_file); check_gate "$f" "${1:?step}"; mark "$f" "$1" x "(done $(now), took $(elapsed "$f")) ${2:-}"; put last_mark "$(epoch)" "$f"; refresh "$f"; cmd_next; }
+cmd_skip() {
+  local f; f=$(state_file)
+  case " $PROTECTED " in *" ${1:?step} "*) granted waiver "$f" || die "$1 is a gate: only the profile, --from/--to or a human waiver ([APPROVAL:waiver]) can skip it";; esac
+  mark "$f" "$1" - "(skipped: ${2:?reason})"; put last_mark "$(epoch)" "$f"; refresh "$f"; cmd_next
+}
+cmd_profile() { # switch the active run to lite once the size is known; only pending steps are skipped
+  [ "${1:-}" = lite ] || die "usage: profile lite"
+  local f s; f=$(state_file); put profile lite "$f"
+  for s in $LITE_SKIP; do grep -Eq "^- \[ \] $s( |\$)" "$f" && mark "$f" "$s" - "(skipped: lite profile)"; done
+  refresh "$f"; cmd_next
+}
 # report.html beside state.md; best effort, never fails a state change
 REPORT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/report.py"
 refresh() { python3 "$REPORT" "$(dirname "$1")" "$FULL_STEPS" >/dev/null 2>&1 || true; }
-cmd_report() { local f; f=$(state_file "${1:-}"); python3 "$REPORT" "$(dirname "$f")" "$FULL_STEPS"; }
+cmd_report() {
+  local show=0 f out; [ "${1:-}" = --open ] && { show=1; shift; }
+  f=$(state_file "${1:-}"); out=$(python3 "$REPORT" "$(dirname "$f")" "$FULL_STEPS"); echo "$out"
+  # --open: design diagrams do not render in a terminal, so show the report in the browser (best effort)
+  if [ "$show" = 1 ] && [ "${CRAFTMAN_NOTIFY:-on}" != off ]; then { open "$out" || xdg-open "$out"; } >/dev/null 2>&1 || true; fi
+}
+cmd_services() { # what is up now that was not up when the run started
+  local f before left; f=$(state_file "${1:-}"); before="$(dirname "$f")/services-before.txt"
+  [ -f "$before" ] || { echo "services: no snapshot for this run"; return 0; }
+  left=$(running 2>/dev/null | while read -r kind id rest; do
+    [ "$kind" = docker ] || grep -qxF "$kind $id" "$before" || echo "  $kind $id ${rest:0:110}"; done) || true
+  if [ -n "$left" ]; then echo "services: started during this run and still up (stop the ones the run started):"; echo "$left"
+  else echo "services: nothing left running"; fi
+  if grep -qx 'docker down' "$before" && dock ps -q >/dev/null; then echo "services: the Docker daemon was down when this run started; quit it if the run started it"; fi
+}
 cmd_set() {
   local f; f=$(state_file); local k="${1:?key}" v="${2-}"
   case "$k" in branch|packages_done) ;; *) die "settable keys: branch, packages_done";; esac
   put "$k" "$v" "$f"; echo "$k: $v"
 }
 cmd_escalate() {
-  local r; r=$(run_id); echo "- $(now) ${1:?text}" >> "$MEM/$r/escalations.md"; echo "logged"
+  local r; r=$(run_id); echo "- $(now) ${1:?text}" >> "$MEM/$r/escalations.md"; cmd_notify "Escalation: $1"; echo "logged"
+}
+# Best-effort desktop notification, so a run that waits on the human is not left unnoticed. Never fails.
+# CRAFTMAN_NOTIFY=off switches it off.
+cmd_notify() {
+  [ -f "$ACTIVE" ] && [ "${CRAFTMAN_NOTIFY:-on}" != off ] || return 0
+  local m="${1:-AI-Craftman is waiting for you}"
+  if command -v osascript >/dev/null 2>&1; then
+    osascript -e 'on run argv' -e 'display notification (item 1 of argv) with title "AI-Craftman" sound name "Glass"' -e 'end run' "$m" >/dev/null 2>&1 || true
+  elif command -v notify-send >/dev/null 2>&1; then
+    notify-send "AI-Craftman" "$m" >/dev/null 2>&1 || true
+  fi
 }
 cmd_status() {
   local f; f=$(state_file "${1:-}")
@@ -150,21 +243,25 @@ cmd_finish() {
   [ -n "$st" ] && put duration "$(dur $(( $(epoch) - st )))" "$f"
   local tmp; tmp=$(mktemp "$MEM/index.md.XXXXXX")
   awk -v r="$r" -v s="${1:-complete}" 'index($0,"- "r" | ")==1 {sub(/\| in_progress \|/, "| "s" |")} {print}' "$MEM/index.md" > "$tmp" && mv "$tmp" "$MEM/index.md"
-  refresh "$f"; rm -f "$ACTIVE"; echo "run $r ${1:-complete}"
+  refresh "$f"; cmd_services "$r" || true; rm -f "$ACTIVE"; echo "run $r ${1:-complete}"
 }
 
 case "${1:-}" in
-  init|next|done|skip|set|escalate|status|list|resume|finish|report) c=$1; shift; "cmd_$c" "$@";;
+  done|skip|set|profile|resume|finish) c=$1; shift; lock; "cmd_$c" "$@";;
+  init|next|escalate|notify|status|list|report|services) c=$1; shift; "cmd_$c" "$@";;
   *) cat <<EOF
 usage: craftman-state <command>
-  init <run-id> [--profile full|lite] [--from STAGE] [--to STAGE] [--skip-deploy] [--max-agent-calls N] [--requirement TEXT]
+  init <run-id> [--profile full|lite] [--from STAGE] [--to STAGE] [--skip-deploy] [--lead] [--max-agent-calls N] [--requirement TEXT]
   next [run-id]              next pending step
-  done <step> [note]         mark step done (active run)
-  skip <step> <reason>       mark step skipped
+  done <step> [note]         mark step done (active run); gates need their passing verdict or grant
+  skip <step> <reason>       mark step skipped (gates need a human waiver)
+  profile lite               switch the active run to the lite profile
   set branch|packages_done <value>
-  escalate <text>            log an escalation
+  escalate <text>            log an escalation and notify the human
+  notify [text]              desktop notification during an active run (CRAFTMAN_NOTIFY=off disables)
   status [run-id] | list | resume <run-id> | finish [complete|aborted]
-  report [run-id]            write report.html (status, design, results) and print its path
+  report [--open] [run-id]   write report.html (status, design diagrams, results), print its path, optionally open it
+  services [run-id]          containers and project processes that are up now and were not when the run started
 stages: $STAGES
 EOF
   exit 1;;

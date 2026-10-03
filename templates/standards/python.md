@@ -38,7 +38,7 @@ pyproject.toml               # ruff (lint+format), mypy --strict, pytest
 - `raise DomainError(...) from e` when translating library errors.
 - No mutable default arguments, no bare `except:`, no `assert` for runtime checks.
 - `ruff check`, `ruff format --check`, `mypy --strict` clean.
-- Tests run in parallel with `pytest-xdist` (`-n auto`), so tests share no global state or fixed ports/paths (use `tmp_path`). Long tests (memory, load, real servers) carry `@pytest.mark.slow`; the fast loop runs `-m "not slow"`, QA and release run everything.
+- Tests run in parallel with `pytest-xdist` (`-n auto`), so tests share no global state or fixed ports/paths (use `tmp_path`). Long tests (memory, load, real servers) carry `@pytest.mark.slow`; the fast loop runs `-m "not slow"`, QA and release run everything. `pytest-timeout` sets the per-test limit (`timeout = 60` in `pyproject.toml`). Testcontainers and servers start in session-scoped fixtures that stop them in a `with` block or a finalizer.
 - Settings use `SettingsConfigDict(env_prefix="<SERVICE>_")`.
 - Translate `sqlalchemy.exc.OperationalError` / `sqlite3.OperationalError` (busy, locked) to `UnavailableError`, and `OSError` with `errno.ENOSPC`/`EDQUOT` to `InsufficientStorageError`, in the repository or adapter.
 - Timeouts: uvicorn `timeout_keep_alive`, plus `anyio.fail_after` around body reads (or a proxy timeout named in the architecture). uvicorn's `limit_concurrency` answers with plain text, so put the limit in middleware that returns the error format, or in the proxy.

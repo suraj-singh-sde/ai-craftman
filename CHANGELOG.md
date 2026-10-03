@@ -2,6 +2,44 @@
 
 All notable changes to this project are documented here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
+## [0.7.0] - 2026-10-03
+
+From a review of the plugin and of the 5h25m notification-service run (64 agent dispatches, 5 packages).
+
+### Added
+- Gates are enforced by the state machine, not only prompted. `craftman-state done` refuses `gov-*`, `security-review` and `qa` until their result file shows the passing verdict, and `approve-architecture` / `approve-deploy` until the human's grant is recorded. `skip` refuses a gate. A human waiver (`[APPROVAL:waiver]`) is the only way past.
+- Engineering agents cannot be dispatched while the architecture gates are pending.
+- `craftman-state profile lite`: one command switches a running run to lite. Before, the profile in `state.md` stayed `full` after seven manual skips, so a resumed run read the wrong profile.
+- Design diagrams. The LLD now carries mermaid diagrams as well as the HLD (modules by layer, data model, main operations); before, it had none. The report's Design tab opens with every HLD and LLD diagram drawn, and the run opens the report in the browser when the HLD is written.
+- Diagrams must render. `craftman-state done architecture|design` refuses a design without diagrams or with ones that will not parse. In the notification-service run both HLD diagrams failed to parse (an unquoted label with parentheses, a `;` in a sequence message), so the approved design showed two error images. The lint agrees with mermaid 11 on all 17 diagrams from four real runs. A diagram that still fails is shown as its source with the reason.
+- Spin-down. Agents stop every container, server and background process they start. `craftman-state services` lists what is up now and was not when the run started, and the orchestrator stops it after each engineering group and at the end. After the notification-service run, 12 test containers and a hung pytest were still running hours later.
+- `package-lead` agent, opt-in with `--lead` (experimental, not yet proven on a full run): one lead per work package dispatches the build and review agents itself and reports once. In the last run the orchestrator made 213 calls on the session's model and read 44.5M cached tokens, most of them for engineering steps.
+- README logo image (`assets/logo.png`).
+- `handoff-check` skill, preloaded by tdd-engineer, test-writer and code-writer: prove the checks are green, read the diff once as the reviewer, and check that each test can fail for the right reason. Its items are the blocking review findings of four real runs (in the last one, all five first reviews asked for changes). A red package is no longer sent to review; the reviewer also stops at a red suite.
+- Desktop notification (macOS, Linux) when a question or an escalation waits for the human. In the run, the pipeline waited 35 minutes on a crashed Docker daemon before anyone noticed. `CRAFTMAN_NOTIFY=off` disables it. When only the human can unblock a run, the orchestrator now escalates and asks, instead of printing a message and waiting.
+- `tracker:` in `governance.md` (`none`, `github`, `jira`), so the tracker question is a project setting, not a question in every run.
+- README: a pipeline diagram and a diagram of how the orchestrator, agents, hooks and memory fit together.
+- Standards: every test has a time limit; a flaky test is a defect, not something to rerun; tests never assert placeholder behavior (the skeleton's "returns 501 until implemented" test broke in three of five packages).
+
+### Changed
+- `tdd-engineer` builds every package by default. The two-agent build with locked tests is kept for packages that implement auth, crypto, payments or data deletion, and `sensitive` is defined that narrowly. In the run, all five packages were marked sensitive: 17 test-writer and 11 code-writer dispatches, and a code-writer blocked by a wrong test it was not allowed to fix.
+- No work package for end-to-end, load or "hardening" tests: QA writes those once, after the merge. In the run such a package took 77 minutes on slow tests, depended on every other package, and QA then covered the same flows.
+- The git question (not a repository, uncommitted changes) is asked with the first clarification round instead of interrupting again before engineering. Later liaison rounds are read from the liaison's file instead of dispatching it again.
+- In a parallel group, each agent caps its test workers. Three suites at `-n auto` crashed the Docker daemon and stalled the run for 45 minutes.
+- architect, requirements-planner and workflow-coordinator have `Edit` and revise their document in place. The LLD cost 94k output tokens because each revision rewrote it.
+- Every agent pins its reasoning effort (`high`, `medium` or `low` by role), so agents no longer inherit a higher session default.
+- Agent descriptions are half as long. They load into every session of every user who has the plugin enabled.
+- A push approval no longer covers forced pushes or remote branch deletes; those need `[APPROVAL:destroy]`.
+- The report reloads itself only when it was rebuilt, and keeps your tab, scroll position and open documents, so it no longer closes the design you are reading.
+- The run summary holds only facts from the run files (no estimates or sign-off checklists).
+
+### Fixed
+- Agent budget lost counts when agents were dispatched in parallel: 40 concurrent dispatches were counted as 5. `state.md` now has one writer at a time (`craftman-state`, the budget hook and the answer recorder share a lock).
+- `.craftman/active-run` could be committed by `git add -A` (it was, in one test project), which switches the guards on for everyone who pulls the branch. `craftman-state init` now keeps it git-ignored.
+- deploy-guard: a command that started with `craftman-state` could append to `approvals.md` after a `;` or a newline. Only a lone `craftman-state` call is exempt now. `rm -rf .craftman` is blocked during a run.
+- deploy-guard blocked harmless reads of `state.md` that contained `2>&1`.
+- file-guard refused design documents with schema fields such as `password: SecretStr` or `api_key: FILE_SERVICE_API_KEY` as secrets. The keyword rule now needs a value that mixes letters and digits.
+
 ## [0.6.0] - 2026-10-03
 
 ### Added

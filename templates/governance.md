@@ -5,6 +5,7 @@
 autonomy: medium            # low = approve every gate | medium = risk-based | high = only deploy/push/destroy/waivers
 coverage_threshold: 80      # % line coverage required at the release gate
 max_review_loops: 2         # review/fix loops before escalating to a human
+tracker: none               # none | github | jira: create an issue per work package (needs approval)
 
 ## Required at every release
 - Full test suite green; lint and typecheck clean
