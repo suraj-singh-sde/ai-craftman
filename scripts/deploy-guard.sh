@@ -15,19 +15,20 @@ approvals="$root/.craftman/memory/$run/approvals.md"
 # Exact command (and the shell's directory) via python; without python, match against the whole payload
 # (over-blocks, never under-blocks).
 out=$(printf '%s' "$input" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("cwd","")); print(d.get("tool_input",{}).get("command",""))' 2>/dev/null) \
-  && { hookcwd=$(printf '%s' "$out" | head -1); cmd=$(printf '%s' "$out" | tail -n +2); } || { hookcwd=""; cmd="$input"; }
-[ -n "$cmd" ] || cmd="$input"
+  && { hookcwd=$(printf '%s' "$out" | head -1); cmd=$(printf '%s' "$out" | tail -n +2); decoded=1; } || { hookcwd=""; cmd="$input"; decoded=0; }
+[ -n "$cmd" ] || { cmd="$input"; decoded=0; }
 raw=$cmd
-# Match what bash will run, not how it was typed. $cmd is only matched, never executed, so every step below may
-# only make it match more:
-# - join backslash-newline continuations (an odd number of trailing backslashes; an even number is an escaped
-#   backslash and the line ends there)
-# - undo the JSON escapes left by the fallback above (escaped continuation, \t, \n)
-# - tabs become spaces
-# - quotes and backslashes are dropped: bash joins git 'push', git pu\sh and approv''als.md into the plain word
+# Match what bash will run, not how it was typed. $cmd is only matched, never executed.
+# - Only when the text is still JSON (no python): undo its escapes (escaped continuation, \t, \n). On a decoded
+#   command a literal \n is two ordinary characters inside an argument; turning it into a line break would cut
+#   "rm -rf 'x\n' .craftman" in two and hide the target.
+# - Join backslash-newline continuations (an odd number of trailing backslashes; an even number is an escaped
+#   backslash and the line ends there). Tabs become spaces.
+# - Quotes and backslashes are dropped: bash joins git 'push', git pu\sh and approv''als.md into the plain word.
+[ "$decoded" = 1 ] || cmd=$(printf '%s' "$cmd" | sed 's/\\\\\\n//g; s/\\t/ /g' | awk '{ gsub(/\\n/, "\n"); print }')
 cmd=$(printf '%s' "$cmd" \
   | awk '{ if (match($0, /\\+$/) && RLENGTH % 2 == 1) printf "%s", substr($0, 1, length($0) - 1); else print }' \
-  | sed 's/\\\\\\n//g; s/\\t/ /g' | awk '{ gsub(/\\n/, "\n"); print }' | tr '\t' ' ' | tr -d "'\"\\\\")
+  | tr '\t' ' ' | tr -d "'\"\\\\")
 
 block() { echo "AI-Craftman: blocked. $1" >&2; exit 2; }
 
@@ -47,7 +48,7 @@ ctx="$hookcwd $bare"   # a worktree path does not count, unless ".." can lead ba
 printf '%s' "$ctx" | grep -q '\.\.' || ctx=$(printf '%s' "$ctx" | sed 's#\.craftman/worktrees##g')
 if printf '%s' "$ctx" | grep -q '\.craftman'; then names="$names|(stat|approv|answer|activ)[A-Za-z.-]*[*?[{]"; fi
 if [ "$lone" = 0 ] && printf '%s' "$bare" | grep -Eq "$names" \
-   && printf '%s' "$bare" | grep -Eq '(>|tee |sed -i|perl -i|python|node |ruby |cp |mv |rm |truncate|dd )'; then
+   && printf '%s' "$bare" | grep -Eq '(>|tee |sed -i|perl -i|python|node |ruby |cp |mv |rm |ln |truncate|dd )'; then
   block "Run control files (state.md, approvals.md, answers.md, active-run) may only change through craftman-state or the human's answers."
 fi
 # Deleting or moving .craftman would erase the audit trail and switch these guards off (so would git clean -x:
@@ -65,8 +66,10 @@ fi
 force='git[^|;&]* push[^|;&]*([[:space:]]--(for[a-z-]*|de[a-z]*|mi[a-z]*|pru[a-z]*)|[[:space:]]-[A-Za-z0-9]*[fd][A-Za-z0-9]*([[:space:]]|$)|[[:space:]][+:][^[:space:]])'
 need=""
 has() { printf '%s' "$cmd" | grep -Eq "$1"; }
-has 'git[^|;&]* push|gh pr create' && need="$need git-push"
-has "$force" && need="$need force-push"   # on top of git-push, never instead of it
+# "git stash push" saves local changes; it sends nothing anywhere
+pushes() { printf '%s' "$cmd" | sed -E 's/(git[^|;&]*[[:space:]]stash)[[:space:]]+push/\1 save/g' | grep -Eq "$1"; }
+pushes 'git[^|;&]* push|gh pr create' && need="$need git-push"
+pushes "$force" && need="$need force-push"   # on top of git-push, never instead of it
 has '(terraform|tofu|pulumi)[^|;&]* destroy|kubectl[^|;&]* delete|helm[^|;&]* uninstall|aws cloudformation delete-stack' && need="$need destroy"
 has '(terraform|tofu)[^|;&]* apply|pulumi[^|;&]* up|kubectl[^|;&]* (apply|create|replace|patch|rollout|scale|set) |helm[^|;&]* (install|upgrade|rollback)|(cdk|sam|serverless|sls|eb|fly|firebase|wrangler)[^|;&]* (deploy|publish)|aws cloudformation (deploy|create-stack|update-stack)|aws ecs update-service|aws lambda update-function|gcloud[^|;&]* deploy|az[^|;&]* deployment|az webapp deploy|vercel[^|;&]*--prod|netlify deploy[^|;&]*--prod|ansible-playbook|docker[^|;&]* push|git push heroku' && need="$need deploy"
 has '(npm|yarn|pnpm) publish|twine upload|cargo publish|gem push|mvn[^|;&]* deploy|gradle[^|;&]* publish|gh release create' && need="$need publish"

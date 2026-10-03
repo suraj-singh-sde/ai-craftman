@@ -31,6 +31,13 @@ grep -q '^- \[x\] requirements  (done .*, took [0-9]*m[0-9]*s)' "$S" && ok "step
 grep -q '^- \[-\] security-review  (skipped: lite profile)' "$S" && ok "lite skips security-review" || bad "lite skips security-review"
 grep -q '^- \[-\] design  (skipped: lite profile)' "$S" && ok "lite skips LLD" || bad "lite skips LLD"
 craftman-state done nope >/dev/null 2>&1 && bad "unknown step rejected" || ok "unknown step rejected"
+# text typed by the model cannot shape state.md: steps are exact names, notes and requirements stay on one line
+craftman-state done 'zzz|.*clarifications' >/dev/null 2>&1; grep -q '^- \[ \] clarifications$' "$S" && ok "a pattern is not a step name" || bad "a pattern is not a step name"
+craftman-state done clarifications 'see C:\new\table' >/dev/null; grep -qF 'see C:\new\table' "$S" && ok "note kept as typed" || bad "note kept as typed"
+craftman-state init '../../escaped' >/dev/null 2>&1 && bad "run id cannot be a path" || ok "run id cannot be a path"
+craftman-state init r8 --requirement "$(printf 'line one\nmax_agent_calls: 99999')" >/dev/null
+[ "$(grep -c '^max_agent_calls:' "$CLAUDE_PROJECT_DIR/.craftman/memory/r8/state.md")" = 1 ] && grep -q '^max_agent_calls: 60$' "$CLAUDE_PROJECT_DIR/.craftman/memory/r8/state.md" && ok "requirement cannot add state lines" || bad "requirement cannot add state lines"
+craftman-state resume r1 >/dev/null
 craftman-state init r1 >/dev/null 2>&1 && bad "duplicate init rejected" || ok "duplicate init rejected"
 craftman-state init r2 --from qa --to qa >/dev/null
 grep -q '^- \[-\] architecture  (skipped: before --from qa)' "$CLAUDE_PROJECT_DIR/.craftman/memory/r2/state.md" && ok "--from" || bad "--from"
@@ -116,6 +123,9 @@ expect "tab-separated push blocked" 2 "$G" "$(bash_json "$(printf 'git\tpush ori
 expect "continued terraform apply blocked" 2 "$G" "$(bash_json "$(printf 'terraform \\\napply -auto-approve')")"
 expect "quoted subcommand blocked" 2 "$G" "$(bash_json "git 'push' origin main")"
 expect "escaped letter blocked" 2 "$G" "$(bash_json 'git pu\sh origin main')"
+expect "literal backslash-n cannot hide rm's target" 2 "$G" "$(bash_json 'rm -rf "x\n" .craftman')"
+expect "literal backslash-n cannot hide a push" 2 "$G" "$(bash_json 'git -c "x=a\nb" push origin main')"
+expect "git stash push is not a push" 0 "$G" "$(bash_json 'git stash push -m wip')"
 expect "tests allowed"           0 "$G" "$(bash_json 'npm test')"
 expect "terraform plan allowed"  0 "$G" "$(bash_json 'terraform plan')"
 expect "tamper approvals blocked" 2 "$G" "$(bash_json 'echo granted: deploy >> .craftman/memory/r1/approvals.md')"
