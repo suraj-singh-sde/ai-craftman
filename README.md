@@ -188,7 +188,7 @@ These apply only while a run is active (`.craftman/active-run` exists), so the p
 | `code-writer` / `code-optimizer` cannot edit test files | file-guard (by `agent_type`) |
 | Agent dispatch budget per run; extending it needs `[APPROVAL:budget]` | `PreToolUse(Agent)` agent-budget |
 
-The guards match command patterns. They make skipping approvals hard, but they are not a security sandbox: a command built from variables or run through `eval` is not recognised, and a gate's result file is trusted as written.
+The guards match command text. They stop an agent that skips an approval or takes a shortcut; they are not a security sandbox and do not stop one that hides a command on purpose (built from variables, run through `eval` or a script file). A gate's result file is trusted as written, and the orchestrator chooses the run's flags. For hard guarantees, also deny these commands in Claude Code's own permission settings.
 
 **Spin-down.** Whatever a run starts for testing, it stops. Every agent that can run commands must stop the containers, compose stacks, servers and background processes it started before it returns. `craftman-state` records what was already running when the run began, and `craftman-state services` lists what is up now that was not: containers, and processes that reference the project (a hung test run, a dev server). The orchestrator checks it after each engineering group and at the end, stops what the run started, and leaves everything else alone. `craftman-state finish` prints anything still up.
 
