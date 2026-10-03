@@ -66,10 +66,10 @@ fi
 force='git[^|;&]* push[^|;&]*([[:space:]]--(for[a-z-]*|de[a-z]*|mi[a-z]*|pru[a-z]*)|[[:space:]]-[A-Za-z0-9]*[fd][A-Za-z0-9]*([[:space:]]|$)|[[:space:]][+:][^[:space:]])'
 need=""
 has() { printf '%s' "$cmd" | grep -Eq "$1"; }
-# "git stash push" saves local changes; it sends nothing anywhere
-pushes() { printf '%s' "$cmd" | sed -E 's/(git[^|;&]*[[:space:]]stash)[[:space:]]+push/\1 save/g' | grep -Eq "$1"; }
-pushes 'git[^|;&]* push|gh pr create' && need="$need git-push"
-pushes "$force" && need="$need force-push"   # on top of git-push, never instead of it
+# "git stash push" is caught too, on purpose: telling it apart from "git -C stash push" (a real push from a
+# folder named stash) needs git's option grammar. Over-block; plain "git stash" does the same and passes.
+has 'git[^|;&]* push|gh pr create' && need="$need git-push"
+has "$force" && need="$need force-push"   # on top of git-push, never instead of it
 has '(terraform|tofu|pulumi)[^|;&]* destroy|kubectl[^|;&]* delete|helm[^|;&]* uninstall|aws cloudformation delete-stack' && need="$need destroy"
 has '(terraform|tofu)[^|;&]* apply|pulumi[^|;&]* up|kubectl[^|;&]* (apply|create|replace|patch|rollout|scale|set) |helm[^|;&]* (install|upgrade|rollback)|(cdk|sam|serverless|sls|eb|fly|firebase|wrangler)[^|;&]* (deploy|publish)|aws cloudformation (deploy|create-stack|update-stack)|aws ecs update-service|aws lambda update-function|gcloud[^|;&]* deploy|az[^|;&]* deployment|az webapp deploy|vercel[^|;&]*--prod|netlify deploy[^|;&]*--prod|ansible-playbook|docker[^|;&]* push|git push heroku' && need="$need deploy"
 has '(npm|yarn|pnpm) publish|twine upload|cargo publish|gem push|mvn[^|;&]* deploy|gradle[^|;&]* publish|gh release create' && need="$need publish"

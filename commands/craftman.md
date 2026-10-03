@@ -84,7 +84,7 @@ Never mark a step done whose agent returned `status: blocked`, `needs_input` or 
 ### Stage 4 — Engineering and modernization
 - **git-branch**:
   - Not a git repo → liaison question: initialise git (recommended; enables per-package commits and rollback) or continue without git.
-  - Uncommitted changes → liaison question: commit them first (recommended), stash them, or continue on top of them.
+  - Uncommitted changes → liaison question: commit them first (recommended), stash them, or continue on top of them. To stash, use plain `git stash`: the guard treats every `git … push`, including `git stash push`, as a push.
   - Usually this was already answered in `clarifications` (step 0.5): apply that answer. Ask now only if the git state changed since.
   - Then `git switch -c craftman/<run-id>` and `craftman-state set branch craftman/<run-id>`.
 - **engineering**: run the work plan's groups in order. All packages of a group run in parallel (one message, several Agent calls). After the skeleton package, the work plan puts every independent slice in one group.
