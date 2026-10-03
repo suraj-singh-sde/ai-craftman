@@ -177,7 +177,8 @@ These apply only while a run is active (`.craftman/active-run` exists), so the p
 | Guard | Hook |
 |---|---|
 | Deploy, destroy, publish, `git push`, `gh pr create` and tracker commands are blocked until the human answers `Approve` to an `[APPROVAL:<category>]` question | `PreToolUse(Bash)` deploy-guard |
-| A push approval covers a plain push only: forced pushes, remote branch deletes, `--mirror` and `--prune` need their own `[APPROVAL:force-push]`, which an infrastructure `destroy` approval does not cover either | deploy-guard |
+| A push approval covers a plain push only: forced pushes, remote branch deletes, `--mirror` and `--prune` need `[APPROVAL:force-push]` on top of the push approval; an infrastructure `destroy` approval does not cover them | deploy-guard |
+| Approvals belong to one run: a finished run cannot be resumed, so its approvals cannot be reused | `craftman-state` |
 | A gate (`gov-*`, `approve-*`, `security-review`, `qa`) can be marked done only when its result file shows the passing verdict or the human's grant is recorded; the newest result decides, and skipping or overriding one needs the human's waiver for that gate (`[APPROVAL:waiver-<gate>]`) | `craftman-state` |
 | Switching a run to `lite` (which skips gates) is allowed only for a change sized `small`, before any design, and never against a `--profile` the human chose | `craftman-state` |
 | Engineering agents cannot be dispatched while the architecture gates are pending: no code before the approved design | `PreToolUse(Agent)` agent-budget |

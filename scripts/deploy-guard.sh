@@ -18,10 +18,16 @@ out=$(printf '%s' "$input" | python3 -c 'import sys,json; d=json.load(sys.stdin)
   && { hookcwd=$(printf '%s' "$out" | head -1); cmd=$(printf '%s' "$out" | tail -n +2); } || { hookcwd=""; cmd="$input"; }
 [ -n "$cmd" ] || cmd="$input"
 raw=$cmd
-# Match what bash will run, not how it was typed: join backslash-newline continuations (an odd number of
-# trailing backslashes; an even number is an escaped backslash and the line ends there) and turn tabs into
-# spaces (also in their JSON-escaped form, for the fallback above). $cmd is only matched, never executed.
-cmd=$(printf '%s' "$cmd" | awk '{ if (match($0, /\\+$/) && RLENGTH % 2 == 1) printf "%s", substr($0, 1, length($0) - 1); else print }' | tr '\t' ' ' | sed 's/\\\\\\n//g; s/\\t/ /g')
+# Match what bash will run, not how it was typed. $cmd is only matched, never executed, so every step below may
+# only make it match more:
+# - join backslash-newline continuations (an odd number of trailing backslashes; an even number is an escaped
+#   backslash and the line ends there)
+# - undo the JSON escapes left by the fallback above (escaped continuation, \t, \n)
+# - tabs become spaces
+# - quotes and backslashes are dropped: bash joins git 'push', git pu\sh and approv''als.md into the plain word
+cmd=$(printf '%s' "$cmd" \
+  | awk '{ if (match($0, /\\+$/) && RLENGTH % 2 == 1) printf "%s", substr($0, 1, length($0) - 1); else print }' \
+  | sed 's/\\\\\\n//g; s/\\t/ /g' | awk '{ gsub(/\\n/, "\n"); print }' | tr '\t' ' ' | tr -d "'\"\\\\")
 
 block() { echo "AI-Craftman: blocked. $1" >&2; exit 2; }
 
@@ -37,7 +43,9 @@ case "$raw" in *"
 # A control file is named in full. Where the command or the shell's directory is inside .craftman (worktrees
 # aside), a glob on the stem counts too (approval?.md, active-ru*); elsewhere test_state*.py is just a test file.
 names='(state|approvals|answers)\.md|active-run'
-if printf '%s %s' "$hookcwd" "$bare" | sed 's#\.craftman/worktrees##g' | grep -q '\.craftman'; then names="$names|(stat|approv|answer|activ)[A-Za-z.-]*[*?[{]"; fi
+ctx="$hookcwd $bare"   # a worktree path does not count, unless ".." can lead back out of it
+printf '%s' "$ctx" | grep -q '\.\.' || ctx=$(printf '%s' "$ctx" | sed 's#\.craftman/worktrees##g')
+if printf '%s' "$ctx" | grep -q '\.craftman'; then names="$names|(stat|approv|answer|activ)[A-Za-z.-]*[*?[{]"; fi
 if [ "$lone" = 0 ] && printf '%s' "$bare" | grep -Eq "$names" \
    && printf '%s' "$bare" | grep -Eq '(>|tee |sed -i|perl -i|python|node |ruby |cp |mv |rm |truncate|dd )'; then
   block "Run control files (state.md, approvals.md, answers.md, active-run) may only change through craftman-state or the human's answers."
@@ -51,13 +59,14 @@ if printf '%s' "$tgt" | grep -Eq '(^|[;&|[:space:]])(rm|rmdir|unlink|mv|shred)[[
 fi
 
 # A command may touch several categories (git push --force; terraform destroy): each one needs its own grant.
-# A forced push is its own category, so neither a push grant nor an infrastructure destroy grant covers it:
+# A forced push needs force-push in addition to git-push, so neither a push grant nor an infrastructure destroy
+# grant covers it:
 # long flags and git's abbreviations of them (--del, --mir), short flag clusters (-fu), +ref / :ref refspecs.
-sq="'"
-force="git[^|;&]* push[^|;&]*([[:space:]]--(for[a-z-]*|de[a-z]*|mi[a-z]*|pru[a-z]*)|[[:space:]]-[A-Za-z]*[fd][A-Za-z]*([[:space:]]|\$)|[[:space:]][\"$sq]?[+:][^[:space:]])"
+force='git[^|;&]* push[^|;&]*([[:space:]]--(for[a-z-]*|de[a-z]*|mi[a-z]*|pru[a-z]*)|[[:space:]]-[A-Za-z0-9]*[fd][A-Za-z0-9]*([[:space:]]|$)|[[:space:]][+:][^[:space:]])'
 need=""
 has() { printf '%s' "$cmd" | grep -Eq "$1"; }
-if has "$force"; then need="$need force-push"; elif has 'git[^|;&]* push|gh pr create'; then need="$need git-push"; fi
+has 'git[^|;&]* push|gh pr create' && need="$need git-push"
+has "$force" && need="$need force-push"   # on top of git-push, never instead of it
 has '(terraform|tofu|pulumi)[^|;&]* destroy|kubectl[^|;&]* delete|helm[^|;&]* uninstall|aws cloudformation delete-stack' && need="$need destroy"
 has '(terraform|tofu)[^|;&]* apply|pulumi[^|;&]* up|kubectl[^|;&]* (apply|create|replace|patch|rollout|scale|set) |helm[^|;&]* (install|upgrade|rollback)|(cdk|sam|serverless|sls|eb|fly|firebase|wrangler)[^|;&]* (deploy|publish)|aws cloudformation (deploy|create-stack|update-stack)|aws ecs update-service|aws lambda update-function|gcloud[^|;&]* deploy|az[^|;&]* deployment|az webapp deploy|vercel[^|;&]*--prod|netlify deploy[^|;&]*--prod|ansible-playbook|docker[^|;&]* push|git push heroku' && need="$need deploy"
 has '(npm|yarn|pnpm) publish|twine upload|cargo publish|gem push|mvn[^|;&]* deploy|gradle[^|;&]* publish|gh release create' && need="$need publish"

@@ -253,6 +253,8 @@ cmd_status() {
 cmd_list() { [ -f "$MEM/index.md" ] && cat "$MEM/index.md" || echo "no runs yet"; [ -f "$ACTIVE" ] && echo "active: $(cat "$ACTIVE")"; }
 cmd_resume() {
   local r="${1:?run-id}"; [ -f "$MEM/$r/state.md" ] || die "no run $r"
+  # a finished run stays finished: resuming it would bring its old approvals back to life
+  [ "$(get status "$MEM/$r/state.md")" = in_progress ] || die "run $r is $(get status "$MEM/$r/state.md"); start a new run instead"
   echo "$r" > "$ACTIVE"; put status in_progress "$MEM/$r/state.md"; put last_mark "$(epoch)" "$MEM/$r/state.md"; cmd_status "$r"
 }
 cmd_finish() {
