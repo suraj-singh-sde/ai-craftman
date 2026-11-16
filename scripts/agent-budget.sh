@@ -20,16 +20,19 @@ if printf '%s' "$input" | grep -Eq '"subagent_type"[[:space:]]*:[[:space:]]*"ai-
     exit 2
   fi
 fi
-# Parallel dispatches run this hook concurrently: take the state lock so no count is lost. A lock is taken over only
-# when it is itself older than 5s (a crashed holder), never because this waiter has queued for 5s: twenty dispatches
-# on a slow runner queue for longer than that, and a waiter that gave up would lose its count.
+# Parallel dispatches run this hook concurrently: take the state lock so no count is lost. The lock is a file the shell
+# itself creates with O_EXCL (noclobber), not a directory from mkdir(1): on a runner with uutils coreutils (Ubuntu's new
+# default) mkdir returned success to two hooks for the same directory, both read the same count, and one was lost.
+# A lock is taken over only when it is itself older than 5s (a crashed holder), never because this waiter has queued
+# for 5s: forty dispatches on a slow runner queue for longer, and a waiter that gave up would lose its count.
 lock="$root/.craftman/.lock"; i=0
-until mkdir "$lock" 2>/dev/null; do
+[ ! -d "$lock" ] || rmdir "$lock" 2>/dev/null   # a directory lock left by a version before 0.8.0
+until ( set -C; : > "$lock" ) 2>/dev/null; do
   age=$(( $(date +%s) - $(date -r "$lock" +%s 2>/dev/null || date +%s) ))   # date -r: file mtime on BSD and GNU alike
-  [ "$age" -lt 5 ] || { rmdir "$lock" 2>/dev/null; continue; }
+  [ "$age" -lt 5 ] || { rm -f "$lock"; continue; }
   i=$((i+1)); [ "$i" -ge 600 ] && break; sleep 0.1
 done
-trap 'rmdir "$lock" 2>/dev/null' EXIT
+trap 'rm -f "$lock"' EXIT
 calls=$(sed -n 's/^agent_calls: //p' "$state"); calls=${calls:-0}
 max=$(sed -n 's/^max_agent_calls: //p' "$state"); max=${max:-60}
 if [ "$calls" -ge "$max" ] && ! printf '%s' "$input" | grep -Eq '"subagent_type"[[:space:]]*:[[:space:]]*"ai-craftman:(human-liaison|memory-keeper)"'; then

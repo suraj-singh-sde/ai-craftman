@@ -93,9 +93,11 @@ for k in $(seq 40); do ( aj architect | "$HERE/scripts/agent-budget.sh" > "$DBG/
 c2=$(sed -n 's/^agent_calls: //p' "$M3/state.md")
 [ "$c2" = $((c1+40)) ] && ok "parallel dispatches all counted (subshells)" || { bad "parallel dispatches all counted (subshells: $c1 -> $c2)"; cat "$DBG"/*.err | sort | uniq -c | sort -rn | head; }
 rm -rf "$DBG"
-mkdir -p "$CLAUDE_PROJECT_DIR/.craftman/.lock"; touch -t 202001010000 "$CLAUDE_PROJECT_DIR/.craftman/.lock"
+touch -t 202001010000 "$CLAUDE_PROJECT_DIR/.craftman/.lock"
 c0=$(sed -n 's/^agent_calls: //p' "$M3/state.md"); aj architect | "$HERE/scripts/agent-budget.sh"
-[ "$(sed -n 's/^agent_calls: //p' "$M3/state.md")" = $((c0+1)) ] && [ ! -d "$CLAUDE_PROJECT_DIR/.craftman/.lock" ] && ok "stale lock taken over" || bad "stale lock taken over"
+[ "$(sed -n 's/^agent_calls: //p' "$M3/state.md")" = $((c0+1)) ] && [ ! -e "$CLAUDE_PROJECT_DIR/.craftman/.lock" ] && ok "stale lock taken over" || bad "stale lock taken over"
+mkdir "$CLAUDE_PROJECT_DIR/.craftman/.lock"; aj architect | "$HERE/scripts/agent-budget.sh"
+[ "$(sed -n 's/^agent_calls: //p' "$M3/state.md")" = $((c0+2)) ] && [ ! -e "$CLAUDE_PROJECT_DIR/.craftman/.lock" ] && ok "old directory lock replaced" || bad "old directory lock replaced"
 
 # auto profile: one command records lite and skips only the pending lite steps
 craftman-state init r6 --lead >/dev/null; grep -q '^lead: on' "$CLAUDE_PROJECT_DIR/.craftman/memory/r6/state.md" && grep -q '^lead: off' "$S" && ok "--lead recorded" || bad "--lead recorded"

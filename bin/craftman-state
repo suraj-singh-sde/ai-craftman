@@ -80,17 +80,20 @@ mark() { # mark <state> <step> <char> <note>
   mv "$tmp" "$1"
 }
 
-# One writer at a time for state.md (the hooks update it too). A lock older than 5s belongs to a crashed holder and is
-# taken over; a busy one is waited for (up to 60s), so a queue of parallel hooks never loses a write.
+# One writer at a time for state.md (the hooks update it too). The lock is a file the shell creates with O_EXCL
+# (noclobber), never a directory from mkdir(1), which uutils coreutils handed to two processes at once (see
+# agent-budget.sh). A lock older than 5s belongs to a crashed holder and is taken over; a busy one is waited for
+# (up to 60s), so a queue of parallel hooks never loses a write.
 LOCK="$ROOT/.craftman/.lock"
 lock_age() { echo $(( $(date +%s) - $(date -r "$LOCK" +%s 2>/dev/null || date +%s) )); }   # date -r: file mtime, BSD and GNU
 lock() {
   [ -d "$ROOT/.craftman" ] || return 0; local i=0
-  until mkdir "$LOCK" 2>/dev/null; do
-    [ "$(lock_age)" -lt 5 ] || { rmdir "$LOCK" 2>/dev/null; continue; }
+  [ ! -d "$LOCK" ] || rmdir "$LOCK" 2>/dev/null || true   # a directory lock left by a version before 0.8.0
+  until ( set -C; : > "$LOCK" ) 2>/dev/null; do
+    [ "$(lock_age)" -lt 5 ] || { rm -f "$LOCK"; continue; }
     i=$((i+1)); [ "$i" -ge 600 ] && break; sleep 0.1
   done
-  trap 'rmdir "$LOCK" 2>/dev/null' EXIT
+  trap 'rm -f "$LOCK"' EXIT
 }
 # docker with a time limit: a sick daemon can hang for minutes, and a state change must never wait on it
 dock() {

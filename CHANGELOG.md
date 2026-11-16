@@ -25,7 +25,7 @@ Four things a run could not do before: tell a bugfix from a feature before plann
 - The lite rules (combined design, security-focused review, one package) apply to the bugfix profile too.
 
 ### Fixed
-- The agent budget lost counts on a loaded CI runner (the `main` self-check failed on it after the 0.7.0 merge too, while the PR run passed). The state lock was taken over after a waiter had queued for 5 s, so with twenty parallel dispatches a slow holder made a waiter give up the lock and its count. The lock is now taken over only when it is itself older than 5 s (a crashed holder); a busy one is waited for, up to 60 s. The self-check runs 40 parallel dispatches and a stale-lock case.
+- The agent budget lost counts on the CI runner (the `main` self-check failed there after the 0.7.0 merge too, while the PR run passed). A trace of 240 concurrent hooks on the runner showed two hooks holding the lock at once and reading the same count, with no stolen or abandoned lock: `mkdir(1)` had returned success to both for the same directory. The runner's coreutils are uutils 0.10 (Ubuntu's new default), and the lock relied on GNU mkdir's failure on an existing directory. The lock is now a file the shell itself creates with O_EXCL (`set -C`), in `craftman-state`, the budget hook and the answer recorder alike; an old directory lock is replaced. A lock is taken over only when it is itself older than 5 s (a crashed holder), never because a waiter has queued that long. The self-check runs 40 parallel dispatches launched two ways, a stale-lock case and an old-directory-lock case.
 
 ## [0.7.0] - 2026-10-03
 
