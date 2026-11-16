@@ -25,7 +25,7 @@ fi
 # on a slow runner queue for longer than that, and a waiter that gave up would lose its count.
 lock="$root/.craftman/.lock"; i=0
 until mkdir "$lock" 2>/dev/null; do
-  age=$(( $(date +%s) - $(stat -f %m "$lock" 2>/dev/null || stat -c %Y "$lock" 2>/dev/null || date +%s) ))
+  age=$(( $(date +%s) - $(date -r "$lock" +%s 2>/dev/null || date +%s) ))   # date -r: file mtime on BSD and GNU alike
   [ "$age" -lt 5 ] || { rmdir "$lock" 2>/dev/null; continue; }
   i=$((i+1)); [ "$i" -ge 600 ] && break; sleep 0.1
 done
