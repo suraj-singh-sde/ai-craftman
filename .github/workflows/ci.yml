@@ -40,6 +40,10 @@ jobs:
         env:
           ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
         run: |
+          if [ -z "$ANTHROPIC_API_KEY" ]; then
+            echo "::warning::ANTHROPIC_API_KEY is not set for this repository, so the paid smoke evals were skipped. Add the secret to run them on main."
+            exit 0
+          fi
           git config --global user.email ci@example.com
           git config --global user.name ci
           claude plugin eval . --tag smoke --runs 1 --ablation none --scaffold \
@@ -47,7 +51,7 @@ jobs:
             --threshold 0.75 --model claude-sonnet-5-5 --judge-model claude-haiku-4-5 \
             --max-cost-usd 10 --json results.json
       - uses: actions/upload-artifact@v4
-        if: always()
+        if: always() && hashFiles('results.json') != ''
         with:
           name: eval-results
           path: results.json
