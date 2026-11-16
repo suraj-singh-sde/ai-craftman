@@ -60,7 +60,8 @@ def project_root(data):
         return env
     cwd = data.get("cwd") or os.getcwd()
     try:
-        top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd, capture_output=True, text=True, timeout=5).stdout.strip()
+        top = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=cwd, capture_output=True, text=True, timeout=5).stdout.strip()
+        top = top[:-5] if top.endswith("/.git") else ""
     except Exception:
         top = ""
     return top or cwd
@@ -115,10 +116,9 @@ def pending_pair(rundir, prompt):
         return None
     meta = dict(l.split(": ", 1) for l in open(path).read().splitlines() if ": " in l)
     options = [o.strip() for o in meta.get("options", "").split("|") if o.strip()]
-    said = prompt.strip().lower()
+    said = prompt.strip().strip(".!").strip().lower()
     for o in options:
-        ol = o.lower()
-        if said == ol or said.startswith(ol) or (len(said) >= 3 and ol.startswith(said)):
+        if said == o.lower():   # exactly one option's label: a longer message is a question, not an answer
             os.unlink(path)
             return (meta.get("question", ""), o)
     return None

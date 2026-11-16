@@ -22,7 +22,7 @@ import json, os, re, subprocess, sys
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit", "apply_patch"}
 # case-insensitive: a Mac's file system is, so STATE.MD would be read back as state.md
-CONTROL = re.compile(r"\.craftman/(active-run|\.agents-active|memory/[^/]+/((state|approvals|answers)\.md|verify/[^/]+))$", re.I)
+CONTROL = re.compile(r"\.craftman/(active-run|\.agents-active|memory/[^/]+/((state|approvals|answers|pending)\.md|verify/[^/]+))$", re.I)
 PATCH_FILE = re.compile(r"^\*\*\* (?:Add|Update|Delete) File: (.+)$|^\*\*\* Move to: (.+)$", re.M)
 # gate evidence the state machine reads (kind, size, e2e_mode, test_command, RED_CONFIRMED, PASS): one agent writes each
 # file, and craftman-state's latest() reads exactly these names (name.md, name-<n>.md), nothing that merely starts alike
@@ -71,7 +71,8 @@ def project_root(data):
         return env
     cwd = data.get("cwd") or os.getcwd()
     try:
-        top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd, capture_output=True, text=True, timeout=5).stdout.strip()
+        top = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=cwd, capture_output=True, text=True, timeout=5).stdout.strip()
+        top = top[:-5] if top.endswith("/.git") else ""
     except Exception:
         top = ""
     return top or cwd
@@ -117,6 +118,9 @@ def main():
     except OSError:
         active = []
     builder_active = bool(BUILDERS.search(agent)) or (not agent and any(BUILDERS.search(a) for a in active))
+    # Codex names no agent in tool hooks: judge by who is running. Evidence belongs to its owner alone, and nobody
+    # edits test files while an implementer is active (the orchestrator waits for its agents anyway).
+    implementer_active = bool(IMPLEMENTERS.search(agent)) or (not agent and any(IMPLEMENTERS.search(a) for a in active))
 
     if builder_active and any(HIDDEN.search(s) for s in strings(ti)):
         block(f"{agent or 'a builder is active, so this call'} may not touch the hidden acceptance suite. A failing "
@@ -134,6 +138,10 @@ def main():
             block("Run control files change only through craftman-state or the human's recorded answers.")
 
         name = foreign_evidence(agent, path)
+        if not agent and active and EVIDENCE.search(path):
+            owner = OWNER[EVIDENCE.search(path).group(1).lower()]
+            if not all(a.endswith(owner) for a in active):
+                name = EVIDENCE.search(path).group(1).lower()
         if name:
             block(f"{name}.md is gate evidence written by {OWNER[name]}; {agent} may read it, not change it.")
 
@@ -146,7 +154,7 @@ def main():
                 if rx.search(text):
                     block(f"Possible secret in memory file {path} (pattern {rx.pattern[:30]}...). Replace it with <redacted>.")
 
-        if IMPLEMENTERS.search(agent) and TEST_FILE.search(path):
+        if implementer_active and TEST_FILE.search(path):
             block(f"{agent} may not edit test files ({path}). If a test is wrong, stop with status: blocked and explain.")
 
 

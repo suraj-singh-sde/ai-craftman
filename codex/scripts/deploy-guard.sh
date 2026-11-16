@@ -11,7 +11,7 @@ input=$(cat)
 out=$(printf '%s' "$input" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("cwd","")); print(d.get("agent_type","")); print(d.get("tool_input",{}).get("command",""))' 2>/dev/null) \
   && { hookcwd=$(printf '%s' "$out" | sed -n 1p); agent=$(printf '%s' "$out" | sed -n 2p); cmd=$(printf '%s' "$out" | tail -n +3); decoded=1; } || { hookcwd=""; agent=""; cmd="$input"; decoded=0; }
 # The project root: CLAUDE_PROJECT_DIR (Claude Code), else the repository that holds the hook's cwd (Codex).
-root="${CLAUDE_PROJECT_DIR:-$(cd "${hookcwd:-$PWD}" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null || echo "${hookcwd:-$PWD}")}"
+root="${CLAUDE_PROJECT_DIR:-$(cd "${hookcwd:-$PWD}" 2>/dev/null && c=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && echo "${c%/.git}" || echo "${hookcwd:-$PWD}")}"
 active="$root/.craftman/active-run"
 [ -f "$active" ] || exit 0
 run=$(cat "$active")
@@ -44,7 +44,7 @@ case "$raw" in *"
 # A control file is named in full, case-insensitively (a Mac's file system is). Where the command or the shell's
 # directory is inside .craftman (worktrees aside), no write may use a glob at all (tee 0* from the run folder would
 # overwrite the evidence files); elsewhere test_state*.py is just a test file.
-names='(state|approvals|answers)\.md|active-run|\.agents-active|verify/[^ ;|&]+'
+names='(state|approvals|answers|pending)\.md|active-run|\.agents-active|verify/[^ ;|&]+'
 writes='(>|tee |sed -i|perl -i|python|node |ruby |cp |mv |rm |ln |truncate|dd )'
 ctx="$hookcwd $bare"   # a worktree path does not count, unless ".." can lead back out of it
 printf '%s' "$ctx" | grep -q '\.\.' || ctx=$(printf '%s' "$ctx" | sed 's#\.craftman/worktrees##g')

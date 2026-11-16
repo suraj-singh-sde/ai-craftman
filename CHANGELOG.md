@@ -2,6 +2,14 @@
 
 All notable changes to this project are documented here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
+## [0.9.1] - 2026-11-16
+
+### Fixed
+Security review of the Codex port:
+- The project root is the main checkout (git common dir) in every hook, so a guard no longer goes quiet in a worktree, where `.craftman/active-run` does not exist.
+- `pending.md` is a control file in both guards; a turn-based answer must equal one option's label (case and trailing punctuation aside), so a longer message is a question, not an approval.
+- Under Codex, which names no agent in tool hooks, evidence files are refused unless the only active agents own them, and test files are refused while a code-writer or code-optimizer is active.
+
 ## [0.9.0] - 2026-11-16
 
 ### Added
