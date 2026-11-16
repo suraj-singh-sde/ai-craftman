@@ -51,6 +51,7 @@ Requirements:
 - `python3` (hooks that record human answers and guard memory)
 - `git`
 - optional: `gh` for PRs and issues
+- optional: a [context7](https://github.com/upstash/context7) MCP server (`/plugin install context7@claude-plugins-official`, or `npx ctx7 setup --claude`; a free API key raises its rate limit) for version-exact library docs in design and research
 
 ## Commands
 
@@ -106,7 +107,7 @@ Flags for `craftman`:
    - **devops-engineer** writes the pipelines, infrastructure-as-code and runbook.
    - **operations-engineer** sets up SLOs, alerts, post-deploy checks and the incident runbook.
 
-Any agent can tag an open question `[research]` when documentation or the web can answer it (a library API, the current version, a standard, a known issue). The orchestrator sends those to **research-agent**, which searches the web, checks the primary source and writes cited answers to `research/<step>.md`, instead of asking you. Earlier answers are reused across runs. Whatever it can't settle goes to you as a normal question.
+Any agent can tag an open question `[research]` when documentation or the web can answer it (a library API, the current version, a standard, a known issue). The orchestrator sends those to **research-agent**, which reads the library's own docs first through a [context7](https://github.com/upstash/context7) MCP server when one is connected (the `context7` plugin from the official marketplace, or `npx ctx7 setup --claude`), then searches the web, checks the primary source and writes cited answers to `research/<step>.md`, instead of asking you. The **architect** uses the same docs tools: every library, version and API decision in a design cites its documentation, or becomes a research question. Without a context7 server both fall back to the web. Earlier answers are reused across runs. Whatever it can't settle goes to you as a normal question.
 
 ## Run report (UI)
 
