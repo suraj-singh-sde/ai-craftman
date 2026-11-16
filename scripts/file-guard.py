@@ -1,13 +1,17 @@
 #!/usr/bin/env python3
-"""PreToolUse(Write|Edit|MultiEdit|NotebookEdit) during an active AI-Craftman run.
+"""PreToolUse(Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob|Bash) during an active AI-Craftman run.
 
 Blocks (exit 2):
 - edits to run control files (state.md, approvals.md, answers.md, active-run)
 - secrets written anywhere under .craftman/
 - test-file edits by code-writer / code-optimizer (tests are the spec)
+- any access to the hidden acceptance suite (.craftman/hidden), or to the craftman-state commands that unpack it,
+  by a builder, reviewer or package lead: the suite is a holdout set, and code tuned to it would prove nothing
+- e2e-verifier writes outside .craftman/ (it drives the app and reports; it never patches the code)
 """
 import json, os, re, sys
 
+WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
 CONTROL = re.compile(r"\.craftman/(active-run|memory/[^/]+/(state|approvals|answers)\.md)$")
 SECRETS = [
     re.compile(p) for p in (
@@ -26,11 +30,27 @@ TEST_FILE = re.compile(
     r"(^|/)(tests?|__tests__|spec)/|(^|/)test_[^/]+$|_test\.[a-z]+$|\.(test|spec)\.[a-z]+$|Tests?\.(java|kt|cs)$"
 )
 IMPLEMENTERS = re.compile(r"(^|:)(code-writer|code-optimizer)$")
+BUILDERS = re.compile(r"(^|:)(tdd-engineer|test-writer|code-writer|code-optimizer|code-reviewer|package-lead)$")
+# ponytail: a text match on the tool input. It stops a builder that names the suite's path or unpacks it; a path built
+# from variables or a glob gets through. A real boundary would keep the suite outside the project.
+HIDDEN = re.compile(r"\.craftman/+(\./+)*hidden|craftman-state\s+(hide|reveal|verify\s+hidden)\b")
 
 
 def block(msg):
     print(f"AI-Craftman: blocked. {msg}", file=sys.stderr)
     sys.exit(2)
+
+
+def strings(x):
+    """Every string in a tool input, however nested (file_path, pattern, command, edits[].new_string...)."""
+    if isinstance(x, str):
+        yield x
+    elif isinstance(x, dict):
+        for v in x.values():
+            yield from strings(v)
+    elif isinstance(x, list):
+        for v in x:
+            yield from strings(v)
 
 
 def main():
@@ -39,12 +59,25 @@ def main():
     if not os.path.isfile(os.path.join(root, ".craftman", "active-run")):
         return
     ti = data.get("tool_input") or {}
+    agent = data.get("agent_type") or ""
+
+    if BUILDERS.search(agent) and any(HIDDEN.search(s) for s in strings(ti)):
+        block(f"{agent} may not touch the hidden acceptance suite. A failing acceptance test reaches you as its name "
+              "and a one-line reason; fix the behavior the acceptance criterion names.")
+
+    if data.get("tool_name") not in WRITE_TOOLS:
+        return
     path = (ti.get("file_path") or ti.get("notebook_path") or "").replace("\\", "/")
+    in_craftman = "/.craftman/" in path or path.startswith(".craftman/")
 
     if CONTROL.search(path):
         block("Run control files change only through craftman-state or the human's recorded answers.")
 
-    if "/.craftman/" in path or path.startswith(".craftman/"):
+    if agent.endswith("e2e-verifier") and not in_craftman:
+        block(f"e2e-verifier writes only its evidence under .craftman/ ({path} is not). It drives the app and reports "
+              "defects; engineering changes the code.")
+
+    if in_craftman:
         text = "\n".join(
             str(x) for x in [ti.get("content"), ti.get("new_string"), ti.get("new_source")]
             + [e.get("new_string") for e in ti.get("edits") or []]
@@ -54,8 +87,8 @@ def main():
             if rx.search(text):
                 block(f"Possible secret in memory file {path} (pattern {rx.pattern[:30]}...). Replace it with <redacted>.")
 
-    if IMPLEMENTERS.search(data.get("agent_type") or "") and TEST_FILE.search(path):
-        block(f"{data.get('agent_type')} may not edit test files ({path}). If a test is wrong, stop with status: blocked and explain.")
+    if IMPLEMENTERS.search(agent) and TEST_FILE.search(path):
+        block(f"{agent} may not edit test files ({path}). If a test is wrong, stop with status: blocked and explain.")
 
 
 if __name__ == "__main__":

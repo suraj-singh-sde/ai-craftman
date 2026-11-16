@@ -1,7 +1,7 @@
 {
   "name": "ai-craftman",
-  "version": "0.7.0",
-  "description": "AI-SDLC pipeline: requirements, architecture, test-first engineering, QA and DevOps driven by an orchestration layer, specialist agents, persistent memory, enforced approval gates and human oversight.",
+  "version": "0.8.0",
+  "description": "AI-SDLC pipeline: triage, requirements, architecture, hidden acceptance tests, test-first engineering, verified suites, end-to-end checks on the running app, QA and DevOps, driven by an orchestration layer, specialist agents, persistent memory, enforced gates and human oversight.",
   "author": {
     "name": "Suraj Singh",
     "url": "https://github.com/suraj-singh-sde"
@@ -14,7 +14,7 @@
     "model_tier": {
       "type": "string",
       "title": "Model tier",
-      "description": "economy: opus agents run on sonnet. balanced: each agent's default. max: sonnet agents run on opus.",
+      "description": "economy: opus agents run on sonnet. balanced: each agent's default, a sensitive, large or risky package built on opus, every package reviewed one tier above its builder. max: sonnet agents run on opus.",
       "default": "balanced",
       "options": ["economy", "balanced", "max"]
     },

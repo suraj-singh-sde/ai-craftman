@@ -25,8 +25,10 @@ craftman-state init r1 --profile lite --skip-deploy --max-agent-calls 2 --requir
 S="$CLAUDE_PROJECT_DIR/.craftman/memory/r1/state.md"
 grep -q '^- \[-\] work-plan  (skipped: lite profile)' "$S" && ok "lite skips work-plan" || bad "lite skips work-plan"
 grep -q '^- \[-\] delivery  (skipped: --skip-deploy)' "$S" && ok "skip-deploy" || bad "skip-deploy"
-craftman-state next | grep -q 'next: requirements' && ok "next=requirements" || bad "next=requirements"
+craftman-state next | grep -q 'next: triage  stage: requirements  owner: triage' && ok "triage comes first" || bad "triage comes first"
+craftman-state done triage >/dev/null; craftman-state next | grep -q 'next: requirements' && ok "next=requirements" || bad "next=requirements"
 craftman-state done requirements >/dev/null; craftman-state next | grep -q 'next: clarifications' && ok "done advances" || bad "done advances"
+grep -q '^- \[ \] hidden-tests' "$S" && grep -q '^- \[ \] e2e' "$S" && ok "lite keeps hidden tests and e2e" || bad "lite keeps hidden tests and e2e"
 grep -q '^- \[x\] requirements  (done .*, took [0-9]*m[0-9]*s)' "$S" && ok "step duration recorded" || bad "step duration recorded"
 grep -q '^- \[-\] security-review  (skipped: lite profile)' "$S" && ok "lite skips security-review" || bad "lite skips security-review"
 grep -q '^- \[-\] design  (skipped: lite profile)' "$S" && ok "lite skips LLD" || bad "lite skips LLD"
@@ -97,6 +99,71 @@ craftman-state profile lite >/dev/null 2>&1 && bad "lite refused without size: s
 printf -- '---\nagent: requirements-planner\nsize: small\n---\n' > "$(dirname "$S4")/01-requirements.md"
 craftman-state profile lite >/dev/null
 grep -q '^profile: lite' "$S4" && grep -q '^- \[-\] gov-design  (skipped: lite profile)' "$S4" && grep -q '^- \[x\] requirements' "$S4" && ok "profile lite switch" || bad "profile lite switch"
+
+# bugfix profile: lite without a design. The switch needs the fast triage and the planner to agree on the kind.
+craftman-state init r9 >/dev/null; M9="$CLAUDE_PROJECT_DIR/.craftman/memory/r9"
+craftman-state done triage >/dev/null; craftman-state done requirements >/dev/null
+craftman-state profile bugfix >/dev/null 2>&1 && bad "bugfix refused without kind headers" || ok "bugfix refused without kind headers"
+printf -- '---\nkind: bugfix\ne2e_mode: local\n---\n' > "$M9/00-triage.md"
+craftman-state profile bugfix >/dev/null 2>&1 && bad "bugfix refused when only triage says so" || ok "bugfix refused when only triage says so"
+printf -- '---\nkind: bugfix\nsize: small\n---\n' > "$M9/01-requirements.md"
+craftman-state profile bugfix >/dev/null || bad "profile bugfix switch"
+grep -q '^profile: bugfix' "$M9/state.md" && grep -q '^- \[-\] architecture  (skipped: bugfix profile)' "$M9/state.md" && grep -q '^- \[-\] gov-design  (skipped: bugfix profile)' "$M9/state.md" \
+  && grep -q '^- \[ \] hidden-tests' "$M9/state.md" && grep -q '^- \[ \] e2e' "$M9/state.md" && ok "bugfix skips the design, keeps hidden tests and e2e" || bad "bugfix skips the design, keeps hidden tests and e2e"
+craftman-state init r10 --profile bugfix >/dev/null; grep -q '^- \[-\] gov-architecture  (skipped: bugfix profile)' "$CLAUDE_PROJECT_DIR/.craftman/memory/r10/state.md" && ok "--profile bugfix" || bad "--profile bugfix"
+craftman-state init r11 --profile nope >/dev/null 2>&1 && bad "unknown profile refused" || ok "unknown profile refused"
+
+# hidden acceptance suite: written before the code, packed away before the builders start, run by craftman-state itself
+craftman-state init rh --profile lite >/dev/null; MH="$CLAUDE_PROJECT_DIR/.craftman/memory/rh"; HD="$CLAUDE_PROJECT_DIR/.craftman/hidden/rh"
+grep -qx 'hidden/' "$CLAUDE_PROJECT_DIR/.craftman/.gitignore" && ok "hidden suite git-ignored" || bad "hidden suite git-ignored"
+craftman-state hide >/dev/null 2>&1 && bad "hide without a suite refused" || ok "hide without a suite refused"
+craftman-state verify hidden >/dev/null 2>&1 && bad "verify without a suite refused" || ok "verify without a suite refused"
+mkdir -p "$HD/sub"; printf 'sh {dir}/t.sh\n' > "$HD/command"; printf 'test -f "%s/built"\n' "$CLAUDE_PROJECT_DIR" > "$HD/t.sh"; echo x > "$HD/sub/helper.txt"
+craftman-state verify hidden >/dev/null 2>&1 && bad "red suite is FAIL" || ok "red suite is FAIL"
+grep -q '^verdict: FAIL' "$MH/verify/hidden.md" && grep -q '^command: sh {dir}/t.sh' "$MH/verify/hidden.md" && ok "verify records the verdict" || bad "verify records the verdict"
+craftman-state done hidden-tests >/dev/null 2>&1 && bad "hidden-tests refused before hide" || ok "hidden-tests refused before hide"
+printf 'sh {dir}/t.sh' > "$HD/command.bad"; craftman-state hide >/dev/null || bad "hide"
+[ -f "$HD/suite.tgz" ] && [ -f "$HD/command" ] && [ ! -f "$HD/t.sh" ] && [ ! -d "$HD/sub" ] && ok "hide leaves only the tgz and the command" || bad "hide leaves only the tgz and the command"
+craftman-state done hidden-tests >/dev/null 2>&1 && bad "hidden-tests refused without RED_CONFIRMED" || ok "hidden-tests refused without RED_CONFIRMED"
+printf -- '---\nverdict: RED_CONFIRMED\n---\n' > "$MH/09a-hidden-tests.md"
+craftman-state done hidden-tests >/dev/null 2>&1 && ok "hidden-tests done once packed and red" || bad "hidden-tests done once packed and red"
+craftman-state skip e2e "meh" >/dev/null 2>&1 && bad "e2e skip refused" || ok "e2e skip refused"
+craftman-state verify hidden >/dev/null 2>&1 && bad "packed suite still fails" || ok "packed suite runs from the tgz"
+[ ! -d "$HD/.tmp" ] && ok "verify removes the unpacked copy" || bad "verify removes the unpacked copy"
+touch "$CLAUDE_PROJECT_DIR/built"
+craftman-state verify hidden >/dev/null && grep -q '^verdict: PASS' "$MH/verify/hidden-3.md" && ok "fixed code passes, rounds numbered" || bad "fixed code passes, rounds numbered"
+craftman-state reveal >/dev/null; [ -f "$HD/t.sh" ] && [ -f "$HD/sub/helper.txt" ] && ok "reveal unpacks the suite" || bad "reveal unpacks the suite"
+printf 'sleep 30\n' > "$HD/t.sh"; craftman-state hide >/dev/null
+craftman-state verify hidden --limit 1 >/dev/null 2>&1 && bad "hung suite is FAIL" || ok "hung suite is FAIL"
+grep -q '^exit: 124' "$MH/verify/hidden-4.md" && ok "timeout recorded" || bad "timeout recorded"
+# a sandbox may refuse the system temp dir (the plugin eval does; macOS mktemp ignores TMPDIR, so it is faked):
+# hide and verify keep their temp files beside the run
+NOTMP="$(mktemp -d)"; printf '#!/bin/sh\n[ $# -gt 0 ] || { echo "mktemp: mkstemp failed: Operation not permitted" >&2; exit 1; }\nexec /usr/bin/mktemp "$@"\n' > "$NOTMP/mktemp"; chmod +x "$NOTMP/mktemp"
+craftman-state reveal >/dev/null; printf 'exit 0\n' > "$HD/t.sh"
+PATH="$NOTMP:$PATH" craftman-state hide >/dev/null 2>&1 && ok "hide without a system temp dir" || bad "hide without a system temp dir"
+PATH="$NOTMP:$PATH" craftman-state verify hidden >/dev/null 2>&1 && ok "verify without a system temp dir" || bad "verify without a system temp dir"
+rm -rf "$NOTMP"
+[ -z "$(ls -A "$MH/verify" | grep '^\.out\.')" ] && ok "verify leaves no temp file" || bad "verify leaves no temp file"
+craftman-state reveal >/dev/null; printf 'sleep 30\n' > "$HD/t.sh"; craftman-state hide >/dev/null; craftman-state verify hidden --limit 1 >/dev/null 2>&1 || true
+# engineering is done only when craftman-state saw both suites pass
+printf -- '---\ntest_command: sh %s/t2.sh\n---\n' "$CLAUDE_PROJECT_DIR" > "$MH/04-context.md"; printf 'exit 0\n' > "$CLAUDE_PROJECT_DIR/t2.sh"
+craftman-state done engineering >/dev/null 2>&1 && bad "engineering refused without verify tests" || ok "engineering refused without verify tests"
+craftman-state verify tests >/dev/null && grep -q '^verdict: PASS' "$MH/verify/tests.md" && ok "verify tests runs the context command" || bad "verify tests runs the context command"
+craftman-state done engineering >/dev/null 2>&1 && bad "engineering refused while hidden suite fails" || ok "engineering refused while hidden suite fails"
+craftman-state reveal >/dev/null; printf 'exit 0\n' > "$HD/t.sh"; craftman-state hide >/dev/null; craftman-state verify hidden >/dev/null
+craftman-state done engineering >/dev/null 2>&1 && ok "engineering done with both suites green" || bad "engineering done with both suites green"
+printf 'exit 1\n' > "$CLAUDE_PROJECT_DIR/t2.sh"; craftman-state verify tests >/dev/null 2>&1; craftman-state init rh2 --from engineering >/dev/null
+printf -- '---\ntest_command: sh %s/t2.sh\n---\n' "$CLAUDE_PROJECT_DIR" > "$CLAUDE_PROJECT_DIR/.craftman/memory/rh2/04-context.md"
+craftman-state verify tests >/dev/null 2>&1 && bad "failing test command is FAIL" || ok "failing test command is FAIL"
+craftman-state done engineering >/dev/null 2>&1 && bad "newest FAIL blocks engineering" || ok "newest FAIL blocks engineering"
+craftman-state done engineering >/dev/null 2>&1; craftman-state resume rh >/dev/null
+# e2e: a result or nothing to drive
+craftman-state done e2e >/dev/null 2>&1 && bad "e2e without result refused" || ok "e2e without result refused"
+printf -- '---\nverdict: FAIL\n---\n' > "$MH/11a-e2e.md"; craftman-state done e2e >/dev/null 2>&1 && bad "failed e2e refused" || ok "failed e2e refused"
+printf -- '---\nverdict: PASS\n---\n' > "$MH/11a-e2e-2.md"; craftman-state done e2e >/dev/null 2>&1 && ok "passed e2e accepted" || bad "passed e2e accepted"
+craftman-state init re --profile lite >/dev/null; printf -- '---\ne2e_mode: none\n---\n' > "$CLAUDE_PROJECT_DIR/.craftman/memory/re/00-triage.md"
+craftman-state done e2e >/dev/null 2>&1 && ok "e2e_mode none passes the e2e gate" || bad "e2e_mode none passes the e2e gate"
+rm -f "$CLAUDE_PROJECT_DIR/built" "$CLAUDE_PROJECT_DIR/t2.sh"
 
 # spin-down: services reports only what was started during the run (docker faked, so the check is the same everywhere)
 STUB="$(mktemp -d)"; printf '#!/bin/sh\n[ "$1" = ps ] && cat "%s/ps"\n' "$STUB" > "$STUB/docker"; chmod +x "$STUB/docker"
@@ -204,10 +271,27 @@ expect "code-writer test blocked" 2 "$F" "$(fj /repo/tests/test_api.py x ai-craf
 expect "code-writer .spec blocked" 2 "$F" "$(fj /repo/src/api.spec.ts x ai-craftman:code-optimizer)"
 expect "code-writer src allowed"  0 "$F" "$(fj /repo/src/api.py x ai-craftman:code-writer)"
 expect "test-writer test allowed" 0 "$F" "$(fj /repo/tests/test_api.py x ai-craftman:test-writer)"
+# the hidden acceptance suite: builders, reviewers and leads are kept out by path, by command and by grep
+hj() { python3 -c 'import json,sys; d={"tool_name":sys.argv[1],"tool_input":json.loads(sys.argv[2])}; d.update({"agent_type":"ai-craftman:"+sys.argv[3]} if sys.argv[3] else {}); print(json.dumps(d))' "$@"; }
+expect "builder cannot read the hidden suite" 2 "$F" "$(hj Read '{"file_path":"/repo/.craftman/hidden/r1/test_ac.py"}' tdd-engineer)"
+expect "reviewer cannot grep it"           2 "$F" "$(hj Grep '{"pattern":"def test","path":"/repo/.craftman/hidden"}' code-reviewer)"
+expect "builder cannot cat it"             2 "$F" "$(hj Bash '{"command":"cat .craftman/./hidden/r1/test_ac.py"}' code-writer)"
+expect "lead cannot unpack it"             2 "$F" "$(hj Bash '{"command":"craftman-state reveal"}' package-lead)"
+expect "builder cannot run it"             2 "$F" "$(hj Bash '{"command":"craftman-state verify hidden"}' tdd-engineer)"
+expect "builder runs its own tests"        0 "$F" "$(hj Bash '{"command":"pytest -q tests/"}' tdd-engineer)"
+expect "builder reads its own tests"       0 "$F" "$(hj Read '{"file_path":"/repo/tests/test_api.py"}' tdd-engineer)"
+expect "acceptance-writer writes the suite" 0 "$F" "$(hj Write '{"file_path":"/repo/.craftman/hidden/r1/test_ac.py","content":"def test_ac1(): pass"}' acceptance-writer)"
+expect "qa reads the revealed suite"       0 "$F" "$(hj Read '{"file_path":"/repo/.craftman/hidden/r1/test_ac.py"}' qa-engineer)"
+expect "orchestrator reads it"             0 "$F" "$(hj Read '{"file_path":"/repo/.craftman/hidden/r1/test_ac.py"}' '')"
+expect "orchestrator reads state"          0 "$F" "$(hj Read '{"file_path":"'"$M"'/state.md"}' '')"
+expect "e2e-verifier cannot patch source"  2 "$F" "$(hj Write '{"file_path":"/repo/src/app.py","content":"x"}' e2e-verifier)"
+expect "e2e-verifier writes evidence"      0 "$F" "$(hj Write '{"file_path":"'"$M"'/e2e/AC-1.txt","content":"x"}' e2e-verifier)"
+grep -q '"matcher": "Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob|Bash"' "$HERE/hooks/hooks.json" && ok "file guard sees reads and commands" || bad "file guard sees reads and commands"
 
 # agent budget (max 2 from init)
 expect "engineer blocked before design gates" 2 "$B" "$(aj tdd-engineer)"
 expect "package lead blocked before design gates" 2 "$B" "$(aj package-lead)"
+expect "acceptance-writer blocked before design gates" 2 "$B" "$(aj acceptance-writer)"
 before=$(sed -n 's/^agent_calls: //p' "$S")
 expect "sendmessage allowed" 0 "$B" '{"tool_name":"SendMessage","tool_input":{"to":"abc","message":"x"}}'
 [ "$(sed -n 's/^agent_calls: //p' "$S")" = $((before+1)) ] && ok "sendmessage counted" || bad "sendmessage counted"
@@ -227,8 +311,8 @@ for a in "$HERE"/agents/*.md; do
 done
 ok "agents carry output contract"
 
-# every agent that can run commands must stop what it starts
-for a in $(grep -l '^tools: .*Bash' "$HERE"/agents/*.md); do
+# every agent that can run commands must stop what it starts (no tools line = inherits everything, Bash included)
+for a in $(grep -l '^tools: .*Bash' "$HERE"/agents/*.md) $(grep -L '^tools:' "$HERE"/agents/*.md); do
   grep -qF "Stop everything you start." "$a" || bad "services rule in $(basename "$a")"
 done
 ok "bash agents carry the spin-down rule"
@@ -238,6 +322,8 @@ for s in $(sed -n 's/^  - ai-craftman://p' "$HERE"/agents/*.md | sort -u); do
   [ -f "$HERE/skills/$s/SKILL.md" ] || bad "missing skill $s"
 done
 ok "agent skills exist"
+# the triage header is read by the gates (profile bugfix, e2e), so its agent must be told the exact keys
+grep -q '^e2e_mode: container | local | none' "$HERE/agents/triage.md" && grep -q '^kind: feature | bugfix' "$HERE/agents/triage.md" && ok "triage spells out its header keys" || bad "triage spells out its header keys"
 
 craftman-state finish >/dev/null; [ -f "$CLAUDE_PROJECT_DIR/.craftman/active-run" ] && bad "finish clears active" || ok "finish clears active"
 craftman-state resume r1 >/dev/null 2>&1 && bad "finished run cannot be resumed" || ok "finished run cannot be resumed"
