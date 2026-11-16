@@ -15,7 +15,7 @@ from pathlib import Path
 
 DESIGN = ["06-hld.md", "07-gov-architecture.md", "08-oversight-architecture.md",
           "08a-lld.md", "08b-gov-design.md", "09-work-plan.md"]
-STATUS = ["approvals.md", "escalations.md", "answers.md"]
+STATUS = ["00-triage.md", "approvals.md", "escalations.md", "answers.md"]
 STEP_RE = re.compile(r"^- \[(.)\] (\S+)\s*(.*)$")
 TOOK_RE = re.compile(r"took (\S+)\)")
 
@@ -178,7 +178,7 @@ const steps = `<div class="tablewrap"><table><tr><th>Step</th><th>Stage</th><th>
   ${slow ? `<p class="muted">Slowest steps: ${slow}</p>` : ''}`;
 
 // Diagrams first: every mermaid block of the HLD and LLD, under the heading it sits in. They are what the human approves.
-const DESIGNS = {'06-hld.md': I.profile === 'lite' ? 'Design' : 'HLD', '08a-lld.md': 'LLD'};
+const DESIGNS = {'06-hld.md': I.profile === 'full' ? 'HLD' : 'Design', '08a-lld.md': 'LLD'};
 const diagrams = D.design.filter(d => DESIGNS[d.path]).map(d => {
   const found = []; let head = '', code = null;
   d.body.split('\n').forEach(line => {

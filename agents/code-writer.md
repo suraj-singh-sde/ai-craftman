@@ -25,6 +25,7 @@ Work package, `workdir`, test files, architecture path, context path (commands),
 4. Run the formatter, linter and type checker from the context commands, and fix everything they report.
 5. Never edit test files (a hook blocks it). If a test is wrong, stop with `status: blocked` and explain.
 6. Work only inside `workdir`.
+7. A failing acceptance test reaches you as its name and a one-line reason: that suite is hidden from you on purpose, and a hook refuses any attempt to read it. Fix the behavior the acceptance criterion names; never guess at the test.
 
 ## Test runs
 While iterating, run only this package's tests with the context's `fast_test_command` (or the test command with `-x` and the package's test paths). Run the full suite once at the end.

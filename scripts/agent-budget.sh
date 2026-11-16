@@ -12,8 +12,8 @@ if ! printf '%s' "$input" | grep -Eq '"tool_name"[[:space:]]*:[[:space:]]*"SendM
 fi
 state="$root/.craftman/memory/$(cat "$active")/state.md"
 [ -f "$state" ] || exit 0
-# No code before the design: engineering agents wait until the architecture gates are done or skipped.
-if printf '%s' "$input" | grep -Eq '"subagent_type"[[:space:]]*:[[:space:]]*"ai-craftman:(package-lead|tdd-engineer|test-writer|code-writer|code-optimizer)"'; then
+# No code (and no acceptance suite) before the design: these agents wait until the architecture gates are done or skipped.
+if printf '%s' "$input" | grep -Eq '"subagent_type"[[:space:]]*:[[:space:]]*"ai-craftman:(package-lead|tdd-engineer|test-writer|code-writer|code-optimizer|acceptance-writer|e2e-verifier)"'; then
   pending=$(sed -n -E 's/^- \[ \] (gov-architecture|approve-architecture|gov-design)( .*)?$/\1/p' "$state" | tr '\n' ' ')
   if [ -n "$pending" ]; then
     echo "AI-Craftman: blocked. Engineering agents cannot start while the architecture gates are pending: $pending. Finish them with craftman-state first." >&2

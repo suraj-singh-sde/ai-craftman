@@ -1,6 +1,6 @@
 ---
 description: Run the AI-Craftman SDLC pipeline (requirements → HLD → LLD → engineering → QA → DevOps) on a requirement.
-argument-hint: "[--profile full|lite] [--from STAGE] [--to STAGE] [--skip-deploy] [--lead] <requirement text or file path>"
+argument-hint: "[--profile full|lite|bugfix] [--from STAGE] [--to STAGE] [--skip-deploy] [--lead] <requirement text or file path>"
 ---
 
 # AI-Craftman — Orchestration Layer
@@ -12,14 +12,14 @@ Arguments: $ARGUMENTS
 ## 0. Parse and start
 
 1. Split the arguments into flags and the requirement:
-   - `--profile full|lite` (default: ask, see step 4), `--from STAGE`, `--to STAGE`, `--skip-deploy`, `--lead` (experimental: one `package-lead` agent runs each work package, see engineering).
+   - `--profile full|lite|bugfix` (default: decided in step 4), `--from STAGE`, `--to STAGE`, `--skip-deploy`, `--lead` (experimental: one `package-lead` agent runs each work package, see engineering).
    - Stages: `requirements context architecture engineering qa devops`.
    - The rest is the requirement. If it is a file path, read it. If it is empty, use the requirement from the conversation; if there is none, ask the human for it.
 2. Check the environment: run `craftman-state list` (if the command is not found, use `"${CLAUDE_PLUGIN_ROOT}/bin/craftman-state"` everywhere below). If `.craftman/` does not exist, run the steps of `/ai-craftman:craftman-init` first. If a run is active, ask the human (through human-liaison) whether to resume it (`/ai-craftman:craftman-resume <run-id>`) or start a new one.
 3. Run id: `YYYYMMDD-<short-kebab-slug>` (max 40 chars).
-4. Profile: if `--profile` was not given, it is decided automatically after step `requirements` from the planner's `size`: small → `lite`, medium or large → `full`. Don't ask; tell the human in the status line (`profile: lite (size small); rerun with --profile full to change`). Until then the run is `full`: leave `--profile` out of `init` unless the human gave it.
+4. Profile: if `--profile` was not given, it is decided automatically after step `requirements`, from the triage and the planner together: both headers say `kind: bugfix` → `bugfix`; otherwise the planner's `size`: small → `lite`, medium or large → `full`. Don't ask; tell the human in the status line (`profile: bugfix (triage and planner agree); rerun with --profile full to change`). Until then the run is `full`: leave `--profile` out of `init` unless the human gave it.
 5. `craftman-state init <run-id> [--profile <p>] [--from S] [--to S] [--skip-deploy] [--lead] --max-agent-calls ${user_config.max_agent_calls} --requirement "<first 100 chars>"`
-   If the profile changes to lite after step 4, record it with one command: `craftman-state profile lite` (it sets the profile and skips the pending lite steps). It is refused unless the requirements header says `size: small`, the human did not choose the profile, and architecture has not started.
+   If the profile changes after step 4, record it with one command: `craftman-state profile lite|bugfix` (it sets the profile and skips that profile's pending steps). It is refused unless the evidence is on disk (`size: small` in the requirements header for lite; `kind: bugfix` in both the triage and the requirements headers for bugfix), the human did not choose the profile, and architecture has not started.
    Check git now (`git rev-parse --is-inside-work-tree`, `git status --porcelain`). If this is not a repository or it has uncommitted changes, put the git question (see **git-branch**) into the first liaison round of `clarifications`, so the human is not interrupted again right before engineering.
 6. If `craftman-state init` could not run (no Bash access, script missing, error), STOP and tell the human. Never run the pipeline without state: the approvals and budget hooks depend on it.
 7. Create one task-list item per pending step shown in `.craftman/memory/<run-id>/state.md`, so progress is visible and nothing is skipped. Tell the human once: `Live report: .craftman/memory/<run-id>/report.html` (open it in a browser; `craftman-state` refreshes it after every step, and the page reloads itself while the run is in progress).
@@ -32,14 +32,20 @@ Repeat until `craftman-state next` prints `next: none`:
 3. `craftman-state done <step> "<one-line outcome>"` (or `skip <step> "<reason>"`) and tick the task item.
 4. Tell the human one status line: `[stage] step: outcome`.
 
-Never mark a step done whose agent returned `status: blocked`, `needs_input` or a failing verdict; resolve it first. This is enforced: `craftman-state done` refuses a gate (`gov-*`, `approve-*`, `security-review`, `qa`) until its result file shows the passing verdict or the human's grant is recorded, `skip` refuses a gate without the human's waiver for that gate, and a hook holds engineering agents back until the architecture gates are done. When one refuses, resolve the gate; never work around it.
+Never mark a step done whose agent returned `status: blocked`, `needs_input` or a failing verdict; resolve it first. This is enforced: `craftman-state done` refuses a gate (`gov-*`, `approve-*`, `hidden-tests`, `security-review`, `e2e`, `qa`) until its result file shows the passing verdict or the human's grant is recorded, refuses `engineering` until `craftman-state verify` saw the test suite and the hidden suite pass, `skip` refuses a gate without the human's waiver for that gate, and a hook holds engineering agents back until the architecture gates are done. When one refuses, resolve the gate; never work around it.
 
 ## 2. Rules for every dispatch
 
 - **Fresh agent per unit of work.** Every package step (tdd-engineer or test-writer/code-writer, and code-reviewer, per WP) and every liaison round is a new `Agent` call. Never use `SendMessage` to hand a finished agent a new package, stage or round: its whole context is re-read on every turn, so reusing it multiplies cost. `SendMessage` is only for one follow-up inside the same step (e.g. the planner finalising with the human's answers), at most once. The budget hook counts both.
 - **Answers are recorded automatically.** A hook writes every human answer to `answers.md`. Never send answers to the liaison to "record" them; pass them straight to the agent that needs them.
 - **Paths, not content.** Always pass absolute paths: an agent working in a worktree resolves relative ones against its `workdir`. Give each agent: the run directory `.craftman/memory/<run-id>/`, the input file paths it lists under "Input", and `out: <exact file path>`. Agents write their full output there and return only a short summary + header values + open questions. Never paste one agent's full output into another's prompt. Read a memory file yourself only when you need a specific value.
-- **Model tier** (`${user_config.model_tier}`): `economy` → pass `model: sonnet` to agents whose default is opus, and never upgrade. `max` → pass `model: opus` to agents whose default is sonnet. `balanced` or anything else → no override, except that `code-reviewer` gets `model: opus` for packages marked `sensitive: true` and whenever it has `security_focus: true`.
+- **Model routing** (`${user_config.model_tier}`). Every agent pins its own model; the tier and the task move it:
+  - `economy`: pass `model: sonnet` to agents whose default is opus, and never upgrade, except `code-reviewer` on a `sensitive: true` package (`model: opus`).
+  - `max`: pass `model: opus` to agents whose default is sonnet.
+  - `balanced` (or anything else): a package's builder (`tdd-engineer`, `test-writer`, `code-writer`) gets `model: opus` when the package is `sensitive: true`, `size: L`, or carries a triage `risk` flag; otherwise its default. The **reviewer runs one tier above the builder**: a package built on sonnet is reviewed with `model: opus`; one built on opus is reviewed on opus. `code-reviewer` also gets `model: opus` whenever it has `security_focus: true`.
+  - Never route a builder below sonnet; haiku is for classification and relaying (triage, liaison, oversight, memory).
+- **Guides.** The triage header lists `guides:` (standards and skills that apply to this change). Pass those paths to every agent that reads or writes code or design, after `STD`, as `guides: <paths>`. Agents have no Skill tool; they Read them.
+- **Hidden tests.** `.craftman/hidden/<run-id>/` holds the acceptance suite and a hook keeps builders, reviewers and leads out of it. Never put that path, a test body or an assertion into a builder's prompt. When `craftman-state verify hidden` fails, forward only each failing test's name and one-line reason from the result file, with the AC id, to a fresh builder for the owning package.
 - **Human communication.** Only `ai-craftman:human-liaison` authors questions. Collect all open questions of a step (or of parallel steps) and dispatch the liaison once with them. It returns round 1 as YAML; call `AskUserQuestion` with those questions exactly as written (question, header, options, multiSelect). Pass the answers to the agent that needs them. For further rounds, read them from the liaison's file and ask them the same way; re-dispatch the liaison only when the answers so far change what must be asked. Never ask anything the liaison did not write, and never invent answers.
 - **Research.** Open questions tagged `[research]` go to `ai-craftman:research-agent`, not the human. Batch all of a step's research questions into one dispatch: the questions, the asking agents, the run directory, `R/04-context.md` if it exists, out `R/research/<step>.md`. Then pass that path to the asking agent (one `SendMessage` follow-up, or the agent's next fresh dispatch). Questions it leaves open (`PARTIAL`/`INCONCLUSIVE`) go to the liaison with its options. Research results never override a human answer or governance.
 - **Approvals.** An approval is a liaison question whose text starts with `[APPROVAL:<category>]` and whose first option is `Approve`. A hook records every answer in `answers.md` and writes approved grants to `approvals.md`. Deploy, destroy, publish, git push, PR and tracker commands are blocked by a hook until the matching grant exists. Never try to work around the hook or edit those files.
@@ -47,7 +53,7 @@ Never mark a step done whose agent returned `status: blocked`, `needs_input` or 
 - **Oversight gates.** Dispatch `human-oversight` with the gate, artifact paths and governance verdict. `APPROVAL_REQUIRED` → liaison → `[APPROVAL:<category>]` question → Reject means back to the producing agent with the human's reason.
 - **Refused writes.** If an agent says its file write was refused and returns the content, write that content to its `out` path yourself, unchanged.
 - **Budget.** A hook counts agent dispatches. If it blocks with "budget reached", ask the human through the liaison with `[APPROVAL:budget]`.
-- **Verify, don't trust.** After every test-related step, run the test command from the context file yourself, with a timeout, and check the result matches the agent's claim. A hung suite is a failure to report, not something to wait on.
+- **Verify, don't trust.** An agent's `GREEN`, `READY` or `PASS` is a claim. After every test-related step run `craftman-state verify tests` (the context's `test_command`, with a time limit; a hung suite is a `FAIL`, not something to wait on) and compare with the claim; the result file under `R/verify/` is what the engineering gate reads. Per package, before the review, run the package's fast command yourself as before.
 - **Save wall-clock time.** Steps that don't depend on each other run together, as several Agent calls in one message:
   - `context-memory` runs alongside `architecture` (the architect reads `R/04-context.md`, not the curated memory).
   - `security-review`, `qa` and `docs` all read the committed branch, so dispatch them together. Handle security and QA findings together (fixes go through the engineering fix loop, then both re-check). Re-dispatch docs only if a fix changed a public contract. Mark each step done when it passes.
@@ -59,10 +65,11 @@ Never mark a step done whose agent returned `status: blocked`, `needs_input` or 
 
 ## 3. Steps
 
-`R` = `.craftman/memory/<run-id>`. `SD` = `${CLAUDE_PLUGIN_ROOT}/templates/standards`. `ARCH` = the design paths: `R/06-hld.md`, plus `R/08a-lld.md` once it exists (in the lite profile the HLD file holds both). Wherever an agent's input says "architecture path", pass `ARCH`. `STD` = the standards files named in the context header (`SD/general.md` plus the stack file). Pass `STD` to architect, test-writer, code-writer, code-optimizer, code-reviewer and qa-engineer.
+`R` = `.craftman/memory/<run-id>`. `SD` = `${CLAUDE_PLUGIN_ROOT}/templates/standards`. `ARCH` = the design paths: `R/06-hld.md`, plus `R/08a-lld.md` once it exists (in the lite profile the HLD file holds both; in the bugfix profile there is no design, and `ARCH` = `R/04-context.md` and `R/01-requirements.md`). Wherever an agent's input says "architecture path", pass `ARCH`. `STD` = the standards files named in the context header (`SD/general.md` plus the stack file). Pass `STD` to architect, acceptance-writer, test-writer, code-writer, code-optimizer, code-reviewer and qa-engineer. `HID` = `.craftman/hidden/<run-id>` (absolute), the hidden suite: only acceptance-writer, qa-engineer and you name it. The bugfix profile follows every lite rule below, and is always one package `WP-1`.
 
 ### Stage 1 — Requirements and planning
-- **requirements**: `requirements-planner`, out `R/01-requirements.md`.
+- **triage**: `triage` with the requirement, the project root and the guide catalog (`${CLAUDE_PLUGIN_ROOT}/skills/*/SKILL.md`, `SD/*.md`, `.craftman/skills/*.md`), out `R/00-triage.md`. A haiku first look: `kind`, `size_guess`, `surfaces`, `workflow`, `e2e_mode`, `risk`, `guides`. It decides nothing alone: the planner confirms `kind` and sizes the change, and step 0.4 picks the profile from both.
+- **requirements**: `requirements-planner` with the requirement and `R/00-triage.md`, out `R/01-requirements.md`.
 - **clarifications**: open questions from the planner. Liaison, out `R/02-questions.md`, then AskUserQuestion. Re-dispatch the planner with the answers and its previous path to finalise `R/01-requirements.md`. No questions → skip with reason "no open questions".
 - **gov-requirements**: `governance` gate `requirements`, out `R/03-gov-requirements.md`.
 
@@ -79,6 +86,7 @@ Never mark a step done whose agent returned `status: blocked`, `needs_input` or 
 - **design** (LLD): a fresh `architect` with `level: lld`, the approved `R/06-hld.md`, requirements, context and `STD`. Out `R/08a-lld.md`. Its open questions go to the liaison now. If it needs to change an HLD decision, that is an open question, not a silent change; an approved change goes back through approve-architecture. When the step is done, tell the human the LLD diagrams (modules, data model, main flows) are now in the report's Design tab.
 - **gov-design**: `governance` gate `design` on `R/06-hld.md` and `R/08a-lld.md`, out `R/08b-gov-design.md`.
 - **work-plan**: `workflow-coordinator`, out `R/09-work-plan.md`. Its open questions go to the liaison now, before engineering. In the lite profile (step skipped) treat the whole change as one package `WP-1` with `size: S`.
+- **hidden-tests** (every profile): `acceptance-writer` with requirements, `ARCH`, context, `STD`, `HID` and `workdir` (repo root), out `R/09a-hidden-tests.md`. Needs `RED_CONFIRMED`. Then run `craftman-state verify hidden`: it must **FAIL** now (the behavior does not exist yet); a PASS means the suite tests nothing, so send it back to the writer. Its guessed contracts are open questions for the architect (a fresh dispatch that edits the design in place) or the liaison. Then `craftman-state hide` packs the suite away, and `craftman-state done hidden-tests` is refused until it did. For a fix round later, `craftman-state reveal`, a fresh acceptance-writer, `hide` again.
 - **tracker-issues**: read `tracker:` from `.craftman/governance.md`. `none` or not set → skip with reason "tracker: none", without asking. `github` (`gh issue create`) or `jira` (a connected MCP server) → create one issue per package after `[APPROVAL:tracker]`, and record the links in `R/09-work-plan.md` via the coordinator's draft section.
 
 ### Stage 4 — Engineering and modernization
@@ -106,17 +114,18 @@ Never mark a step done whose agent returned `status: blocked`, `needs_input` or 
      - `performance_issue: true`, or a performance NFR touching this package in the `full` profile: dispatch `code-optimizer` → out `P/4-optimize.md` after approval, and re-run tests and lint.
   3. Commit in `workdir`: `git add -A && git commit -m "feat(<run-id>): <WP> <title>"`.
   4. Worktree packages: in the repo root, `git merge --no-ff craftman/<run-id>-<WP>`, then `git worktree remove .craftman/worktrees/<WP>` and `git branch -d craftman/<run-id>-<WP>`. A merge conflict means escalate.
-  5. After each group's merges, run the format, lint, typecheck and **full** test commands on the run branch yourself. Failures introduced by the merge go to code-writer for the owning package before the next group starts.
+  5. After each group's merges, run the format, lint and typecheck commands on the run branch yourself, then `craftman-state verify tests` (the full suite) and `craftman-state verify hidden`. A failing `verify tests` goes to the builder of the owning package before the next group starts. A failing `verify hidden` is expected until the last group has merged; after it, each failing acceptance test (name, reason, AC id, never the test) goes to a fresh builder for the owning package, then both verifies run again. The review-loop limit and escalation apply.
   6. `craftman-state set packages_done "<comma list>"`.
   7. Repeat for the next group.
   8. **Cleanup** (once, after the last group): collect the `## Cleanup` items from every `P/3-review*.md`. If there are any, one `code-writer` dispatch with all those paths (and one `test-writer` dispatch for `[tests]` items, in parallel), out `R/eng/cleanup.md`. Then run format, lint, typecheck and the full suite, and commit `refactor(<run-id>): review cleanup`.
 
-  Mark the step done only when every package is committed and the branch is green on tests, lint and typecheck.
-- **security-review**: `security-reviewer` with the architecture path and all changed files (`git diff --name-only <base>...HEAD`), out `R/10-security.md`. Dispatch it in the same message as `qa` and `docs`. `FINDINGS` → back to code-writer for the owning package, then re-review. Skipped in the lite profile: there, the code reviewer ran with `security_focus: true`.
+  Mark the step done only when every package is committed, the branch is clean on lint and typecheck, and the newest `verify tests` and `verify hidden` are `PASS` (`craftman-state done engineering` checks the two result files).
+- **security-review**: `security-reviewer` with the architecture path and all changed files (`git diff --name-only <base>...HEAD`), out `R/10-security.md`. Dispatch it in the same message as `e2e`, `qa` and `docs`. `FINDINGS` → back to code-writer for the owning package, then re-review. Skipped in the lite and bugfix profiles: there, the code reviewer ran with `security_focus: true`.
 
 ### Stage 5 — Quality assurance and testing
-- **qa**: `qa-engineer`, out `R/11-qa.md`. `NOT_READY` → each defect goes back through engineering steps 2 to 6 for its package, then QA re-runs (loop limit applies). Commit QA's new tests: `test(<run-id>): QA suite`.
-- **docs**: `doc-writer`, out `R/12-docs.md`, dispatched together with `qa` and `security-review`. Commit: `docs(<run-id>): update documentation`.
+- **e2e**: with `e2e_mode: none` in the triage header, `craftman-state done e2e "e2e_mode: none"` (nothing to drive). Otherwise `e2e-verifier` with requirements, triage, context, `ARCH`, the work plan, `R`, `workdir`, out `R/11a-e2e.md`, dispatched together with `security-review`, `qa` and `docs`. Before dispatching, run `craftman-state services` so you know what was already up. `FAIL` → each defect goes to a fresh `tdd-engineer` for the owning package with the e2e result path, then `craftman-state verify tests` and `verify hidden`, then a fresh e2e-verifier, out `R/11a-e2e-<n>.md` (loop limit applies). Docker down in container mode is not a defect: the verifier falls back to local and says so.
+- **qa**: `craftman-state reveal` first (the hidden suite back in plaintext under `HID`), then `qa-engineer` with `HID`, `R/verify/` and `R/11a-e2e.md`, out `R/11-qa.md`. `NOT_READY` → each defect goes back through engineering steps 2 to 6 for its package, then QA re-runs (loop limit applies). Commit the acceptance suite QA moved into the repository and its own new tests: `test(<run-id>): acceptance and QA suites`.
+- **docs**: `doc-writer`, out `R/12-docs.md`, dispatched together with `e2e`, `qa` and `security-review`. Commit: `docs(<run-id>): update documentation`.
 - **gov-release**: `governance` gate `release`, out `R/13-gov-release.md`.
 - **pull-request**: liaison question `[APPROVAL:git-push]` to push `craftman/<run-id>` and open a PR (options: push and open PR (recommended), keep local only). On approve: `git push -u origin craftman/<run-id>` and `gh pr create` with a body built from the requirements, ADR titles, the QA acceptance matrix and the security verdict. No remote or no `gh` → tell the human and skip with reason.
 
@@ -139,6 +148,7 @@ Never mark a step done whose agent returned `status: blocked`, `needs_input` or 
   - which services were stopped, and any left running on purpose
   - deployment status
   - open risks and escalations
+  - the verification record: the newest `verify tests`, `verify hidden` and e2e verdicts
   - agent calls used and the total duration (from `state.md`), plus the three slowest steps; suggest `/cost` for spend
 
 If the human stops the run, spin down the same way, then `craftman-state finish aborted`. For an interruption, tell them to use `/ai-craftman:craftman-resume <run-id>`.

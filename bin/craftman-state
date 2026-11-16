@@ -1,15 +1,18 @@
 #!/usr/bin/env bash
 # AI-Craftman run state. Plain text on purpose: readable by humans, greppable by hooks.
-# Files: .craftman/active-run, .craftman/memory/index.md, .craftman/memory/<run>/{state,approvals,answers,escalations}.md
+# Files: .craftman/active-run, .craftman/memory/index.md, .craftman/memory/<run>/{state,approvals,answers,escalations}.md,
+# .craftman/hidden/<run>/ (the acceptance suite the builders never see: command, suite.tgz)
 set -euo pipefail
 
 ROOT="${CLAUDE_PROJECT_DIR:-$(git rev-parse --show-toplevel 2>/dev/null || pwd)}"
 MEM="$ROOT/.craftman/memory"
 ACTIVE="$ROOT/.craftman/active-run"
+HID="$ROOT/.craftman/hidden"
 
 STAGES="requirements context architecture engineering qa devops"
 # step:stage:owner
-FULL_STEPS="requirements:requirements:requirements-planner
+FULL_STEPS="triage:requirements:triage
+requirements:requirements:requirements-planner
 clarifications:requirements:human-liaison
 gov-requirements:requirements:governance
 context:context:enterprise-context
@@ -21,10 +24,12 @@ approve-architecture:architecture:human-oversight
 design:architecture:architect
 gov-design:architecture:governance
 work-plan:architecture:workflow-coordinator
+hidden-tests:architecture:acceptance-writer
 tracker-issues:architecture:orchestrator
 git-branch:engineering:orchestrator
 engineering:engineering:tdd-engineer,test-writer,code-writer,code-reviewer,code-optimizer
 security-review:engineering:security-reviewer
+e2e:qa:e2e-verifier
 qa:qa:qa-engineer
 docs:qa:doc-writer
 gov-release:qa:governance
@@ -36,14 +41,18 @@ devops:devops:devops-engineer
 operations:devops:operations-engineer
 summary:finish:memory-keeper"
 LITE_SKIP="gov-requirements approve-architecture design gov-design work-plan tracker-issues security-review"
+# a bugfix is lite without a design: the requirement, the context and the hidden repro test are the spec
+BUGFIX_SKIP="$LITE_SKIP architecture gov-architecture"
 # Gates are marked done only with their evidence on disk. step:result-file-prefix:passing-verdict
 GATES="gov-requirements:03-gov-requirements:PASS
 gov-architecture:07-gov-architecture:PASS
 gov-design:08b-gov-design:PASS
+hidden-tests:09a-hidden-tests:RED_CONFIRMED
 security-review:10-security:PASS
+e2e:11a-e2e:PASS
 qa:11-qa:READY
 gov-release:13-gov-release:PASS"
-PROTECTED="gov-requirements gov-architecture approve-architecture gov-design security-review qa gov-release"
+PROTECTED="gov-requirements gov-architecture approve-architecture gov-design hidden-tests security-review e2e qa gov-release"
 
 die() { echo "craftman-state: $*" >&2; exit 1; }
 now() { date -u +%Y-%m-%dT%H:%M:%SZ; }
@@ -83,6 +92,21 @@ dock() {
   kill "$w" 2>/dev/null || true
   return "$rc"
 }
+# limit <secs> <command>: run a shell command with a time limit and kill its whole process group on timeout (exit 124).
+# macOS has no timeout(1), and a hung suite must end as a FAIL, never as a run that waits for hours.
+limit() {
+  python3 - "$1" "$2" <<'EOF'
+import os, signal, subprocess, sys
+secs, cmd = float(sys.argv[1]), sys.argv[2]
+p = subprocess.Popen(cmd, shell=True, start_new_session=True)
+try:
+    sys.exit(p.wait(timeout=secs))
+except subprocess.TimeoutExpired:
+    os.killpg(p.pid, signal.SIGKILL)
+    p.wait()
+    sys.exit(124)
+EOF
+}
 # Containers, and processes that reference the project path (test runs, dev servers), as "kind id details" lines
 running() {
   local pids
@@ -106,6 +130,16 @@ latest() { # newest result of a gate: <prefix>.md is round 1, <prefix>-<n>.md is
   echo "$best"
 }
 granted() { grep -Eq "^granted: $1( |\$)" "$(dirname "$2")/approvals.md" 2>/dev/null; }   # granted <category> <state-file>
+verified() { # engineering is done when craftman-state itself saw the suites pass: the newest verify/tests and verify/hidden
+  local dir v; dir=$(dirname "$1")
+  granted waiver-engineering "$1" && return 0
+  if grep -Eqs '^test_command: *[^ ]' "$dir"/04-context*.md; then
+    v=$(latest "$dir/verify/tests"); grep -qs '^verdict: PASS' "$v" || die "engineering needs a passing 'craftman-state verify tests' (newest result: ${v:-none})"
+  fi
+  if grep -Eq '^- \[x\] hidden-tests( |$)' "$1"; then
+    v=$(latest "$dir/verify/hidden"); grep -qs '^verdict: PASS' "$v" || die "engineering needs a passing 'craftman-state verify hidden' (newest result: ${v:-none})"
+  fi
+}
 check_gate() { # check_gate <state-file> <step>: refuse unless the step's evidence exists
   local dir g prefix want; dir=$(dirname "$1")
   case "$2" in
@@ -116,7 +150,12 @@ check_gate() { # check_gate <state-file> <step>: refuse unless the step's eviden
     # the human reads the design as diagrams (report, Design tab), so a design without them is not done
     architecture) design_ok "$dir" 06-hld "block diagram, main flow";;
     design) design_ok "$dir" 08a-lld "modules, data model, main flows";;
-    *) g=$(echo "$GATES" | grep "^$2:") || return 0
+    # the suite is packed away before any builder starts; a library has nothing to drive end to end; code is done when
+    # craftman-state ran the suites itself
+    *) [ "$2" != hidden-tests ] || [ -f "$HID/$(get run "$1")/suite.tgz" ] || die "hidden-tests needs the suite packed first: craftman-state hide"
+       [ "$2" != e2e ] || ! grep -Eqs '^e2e_mode: *none' "$dir"/00-triage*.md || return 0
+       [ "$2" != engineering ] || verified "$1"
+       g=$(echo "$GATES" | grep "^$2:") || return 0
        prefix=$(echo "$g" | cut -d: -f2); want=$(echo "$g" | cut -d: -f3)
        # the newest result decides (a later BLOCK overrides an earlier PASS); a waiver is for this gate only
        g=$(latest "$dir/$prefix"); [ -n "$g" ] || die "$2 has no result file ($prefix*.md); run the gate first"
@@ -128,7 +167,7 @@ check_gate() { # check_gate <state-file> <step>: refuse unless the step's eviden
 cmd_init() {
   local run="${1:-}"; shift || true
   case "$run" in ''|.*|*[!A-Za-z0-9._-]*) die "run id may only contain letters, digits, dot, underscore and hyphen, and not start with a dot: '$run'";; esac
-  [ -n "$run" ] || die "usage: init <run-id> [--profile full|lite] [--from STAGE] [--to STAGE] [--skip-deploy] [--lead] [--max-agent-calls N] [--requirement TEXT]"
+  [ -n "$run" ] || die "usage: init <run-id> [--profile full|lite|bugfix] [--from STAGE] [--to STAGE] [--skip-deploy] [--lead] [--max-agent-calls N] [--requirement TEXT]"
   local profile=full setby=default from=requirements to=devops skipdeploy=0 lead=off max=60 req=""
   while [ $# -gt 0 ]; do
     case "$1" in
@@ -142,7 +181,8 @@ cmd_init() {
       *) die "unknown option $1";;
     esac
   done
-  case "$profile" in full|lite) ;; *) die "profile must be full or lite";; esac
+  local skipset=""
+  case "$profile" in full) ;; lite) skipset=$LITE_SKIP;; bugfix) skipset=$BUGFIX_SKIP;; *) die "profile must be full, lite or bugfix";; esac
   req=$(oneline "$req")
   case "$max" in ''|*[!0-9]*) max=60;; esac   # unsubstituted ${user_config...} falls back here
   local fi ti; fi=$(stage_index "$from"); ti=$(stage_index "$to")
@@ -173,7 +213,7 @@ cmd_init() {
       if [ "$si" -lt "$fi" ]; then echo "- [-] $step  (skipped: before --from $from)"
       elif [ "$si" -gt "$ti" ] && [ "$stage" != finish ]; then echo "- [-] $step  (skipped: after --to $to)"
       elif [ "$stage" = devops ] && [ "$skipdeploy" = 1 ]; then echo "- [-] $step  (skipped: --skip-deploy)"
-      elif [ "$profile" = lite ] && echo " $LITE_SKIP " | grep -q " $step "; then echo "- [-] $step  (skipped: lite profile)"
+      elif [ -n "$skipset" ] && echo " $skipset " | grep -q " $step "; then echo "- [-] $step  (skipped: $profile profile)"
       else echo "- [ ] $step"; fi
     done <<< "$FULL_STEPS"
   } > "$dir/state.md"
@@ -181,8 +221,9 @@ cmd_init() {
   mkdir -p "$MEM"; [ -f "$MEM/index.md" ] || echo "# AI-Craftman runs" > "$MEM/index.md"
   echo "- $run | in_progress | $(now) | ${req:0:100}" >> "$MEM/index.md"
   echo "$run" > "$ACTIVE"
-  # A committed active-run would switch the guards on for everyone who pulls the branch.
-  local p; for p in active-run .lock 'memory/*/report.html' 'memory/*/report-version.js'; do grep -qxF "$p" "$ROOT/.craftman/.gitignore" 2>/dev/null || echo "$p" >> "$ROOT/.craftman/.gitignore"; done
+  # A committed active-run would switch the guards on for everyone who pulls the branch. The hidden suite stays out of
+  # the builders' diffs and commits until QA reveals it.
+  local p; for p in active-run .lock hidden/ 'memory/*/report.html' 'memory/*/report-version.js'; do grep -qxF "$p" "$ROOT/.craftman/.gitignore" 2>/dev/null || echo "$p" >> "$ROOT/.craftman/.gitignore"; done
   # What is already running, so the run can stop exactly what it started and nothing else.
   running 2>/dev/null | cut -d' ' -f1,2 > "$dir/services-before.txt" || true
   refresh "$dir/state.md"
@@ -204,19 +245,73 @@ cmd_skip() {
   case " $PROTECTED " in *" ${1:?step} "*) granted "waiver-$1" "$f" || die "$1 is a gate: only the profile, --from/--to or the human's waiver for it ([APPROVAL:waiver-$1]) can skip it";; esac
   mark "$f" "$1" - "(skipped: ${2:?reason})"; put last_mark "$(epoch)" "$f"; refresh "$f"; cmd_next
 }
-cmd_profile() { # switch the active run to lite once the size is known; only pending steps are skipped
-  [ "${1:-}" = lite ] || die "usage: profile lite"
-  local f s; f=$(state_file)
-  # lite skips gates, so it is not a free choice: only for a change the planner sized small, before any design,
-  # and never against a profile the human chose
+cmd_profile() { # switch the active run to lite or bugfix once the kind and size are known; only pending steps are skipped
+  local p="${1:-}" f s skip dir; f=$(state_file); dir=$(dirname "$f")
+  case "$p" in lite) skip=$LITE_SKIP;; bugfix) skip=$BUGFIX_SKIP;; *) die "usage: profile lite|bugfix";; esac
+  # both skip gates, so neither is a free choice: only with the evidence on disk (lite: the planner sized it small;
+  # bugfix: the fast triage and the planner both call it a bugfix), before any design, and never against a profile
+  # the human chose
   if ! granted waiver-profile "$f"; then
-    [ "$(get profile_set_by "$f")" = default ] || die "the human chose this profile (--profile); switching to lite needs [APPROVAL:waiver-profile]"
-    grep -Eqis '^size: *small' "$(dirname "$f")"/01-requirements*.md || die "lite needs 'size: small' in the header of 01-requirements.md, or [APPROVAL:waiver-profile]"
+    [ "$(get profile_set_by "$f")" = default ] || die "the human chose this profile (--profile); switching to $p needs [APPROVAL:waiver-profile]"
+    case "$p" in
+      lite) grep -Eqis '^size: *small' "$dir"/01-requirements*.md || die "lite needs 'size: small' in the header of 01-requirements.md, or [APPROVAL:waiver-profile]";;
+      bugfix) grep -Eqis '^kind: *bugfix' "$dir"/00-triage*.md && grep -Eqis '^kind: *bugfix' "$dir"/01-requirements*.md \
+        || die "bugfix needs 'kind: bugfix' in the headers of both 00-triage.md and 01-requirements.md, or [APPROVAL:waiver-profile]";;
+    esac
   fi
-  grep -Eq '^- \[ \] architecture( |$)' "$f" || die "too late for lite: the architecture step is no longer pending"
-  put profile lite "$f"
-  for s in $LITE_SKIP; do grep -Eq "^- \[ \] $s( |\$)" "$f" && mark "$f" "$s" - "(skipped: lite profile)"; done
+  grep -Eq '^- \[ \] architecture( |$)' "$f" || die "too late for $p: the architecture step is no longer pending"
+  put profile "$p" "$f"
+  for s in $skip; do grep -Eq "^- \[ \] $s( |\$)" "$f" && mark "$f" "$s" - "(skipped: $p profile)"; done
   refresh "$f"; cmd_next
+}
+# Temp files stay beside the run's files (mktemp "<dir>/.x.XXXXXX"), never in the system temp dir: a sandbox such as the
+# plugin eval refuses that dir, and a verify that cannot start must not look like a failing suite.
+# The hidden acceptance suite lives in .craftman/hidden/<run>/: the acceptance-writer writes the tests and a one-line
+# `command` (with {dir} for the test directory) there, hide packs the tests into suite.tgz and removes the plaintext, and
+# verify unpacks them into a temp folder for one run. A hook keeps the builders away from the folder.
+# ponytail: packing deters a stray grep; it is not a security boundary (the orchestrator and the human see everything).
+hidden_dir() { local f; f=$(state_file "${1:-}"); echo "$HID/$(get run "$f")"; }
+cmd_hide() {
+  local d n list; d=$(hidden_dir)
+  [ -s "$d/command" ] || die "no $d/command: the acceptance-writer writes the tests and a one-line command (with {dir} for the test directory) there first"
+  grep -q '{dir}' "$d/command" || die "$d/command must contain {dir}, the directory the tests run from"
+  rm -rf "$d/.tmp"
+  # a second hide (after a fix round) keeps the tests already packed; newer plaintext wins
+  [ ! -f "$d/suite.tgz" ] || tar xzkf "$d/suite.tgz" -C "$d" 2>/dev/null || true
+  list=$(mktemp "$d/.list.XXXXXX"); (cd "$d" && find . -type f ! -name command ! -name 'suite.tgz*' ! -name '.list.*' | sed 's#^\./##') > "$list"
+  n=$(wc -l < "$list" | tr -d ' '); [ "$n" -gt 0 ] || { rm -f "$list"; die "no test files in $d"; }
+  (cd "$d" && tar czf suite.tgz.new -T "$list" && mv suite.tgz.new suite.tgz) || { rm -f "$list"; die "could not pack $d"; }
+  (cd "$d" && find . -mindepth 1 ! -name command ! -name suite.tgz -delete); rm -f "$list"
+  echo "hidden: $n files packed into $d/suite.tgz, plaintext removed"
+}
+cmd_reveal() { # back to plaintext: for the acceptance-writer's fix round, and for QA once engineering passed
+  local d; d=$(hidden_dir); [ -f "$d/suite.tgz" ] || die "no packed suite at $d/suite.tgz"
+  tar xzf "$d/suite.tgz" -C "$d"; echo "$d"
+}
+cmd_verify() { # verify tests|hidden [--limit SECS]: run the suite here, not in an agent, and record the verdict the gates read
+  local name="${1:-}" secs="${CRAFTMAN_VERIFY_LIMIT:-900}" f dir h tmp="" cmd shown out res n rc=0 t0 verdict note=""
+  shift || true; [ "${1:-}" != --limit ] || { secs="${2:?seconds}"; shift 2; }
+  f=$(state_file); dir=$(dirname "$f")
+  case "$name" in
+    tests) cmd=$(sed -n 's/^test_command: *//p' "$dir"/04-context*.md 2>/dev/null | head -1); shown=$cmd
+      [ -n "$cmd" ] || die "no 'test_command:' in the header of 04-context.md";;
+    hidden) h=$(hidden_dir); [ -s "$h/command" ] || die "no hidden suite: the acceptance-writer writes $h/command and the tests first"
+      shown=$(head -1 "$h/command"); cmd=$shown
+      if [ -f "$h/suite.tgz" ]; then tmp="$h/.tmp"; rm -rf "$tmp"; mkdir -p "$tmp"; tar xzf "$h/suite.tgz" -C "$tmp"; cmd=${cmd//\{dir\}/$tmp}
+      else cmd=${cmd//\{dir\}/$h}; fi;;
+    *) die "usage: verify tests|hidden [--limit SECS]";;
+  esac
+  mkdir -p "$dir/verify"; n=0; for res in "$dir/verify/$name"*.md; do [ ! -f "$res" ] || n=$((n+1)); done
+  res="$dir/verify/$name.md"; [ "$n" = 0 ] || res="$dir/verify/$name-$((n+1)).md"
+  out=$(mktemp "$dir/verify/.out.XXXXXX"); t0=$(epoch)
+  (cd "$ROOT" && limit "$secs" "$cmd") > "$out" 2>&1 || rc=$?
+  [ -z "$tmp" ] || rm -rf "$tmp"
+  verdict=PASS; [ "$rc" = 0 ] || verdict=FAIL; [ "$rc" != 124 ] || note=" (timed out after ${secs}s)"
+  { printf -- '---\nagent: craftman-state\nstatus: done\nverdict: %s\ncommand: %s\nexit: %s\nseconds: %s\n---\n' "$verdict" "$shown" "$rc" "$(( $(epoch) - t0 ))"
+    echo "## Output (last 80 lines)$note"; echo '```'; tail -n 80 "$out" | cut -c1-400; echo '```'; } > "$res"
+  rm -f "$out"; refresh "$f"
+  echo "verify $name: $verdict$note (exit $rc) -> $res"
+  [ "$verdict" = PASS ]
 }
 # report.html beside state.md; best effort, never fails a state change
 REPORT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/scripts/report.py"
@@ -279,14 +374,18 @@ cmd_finish() {
 
 case "${1:-}" in
   done|skip|set|profile|resume|finish) c=$1; shift; lock; "cmd_$c" "$@";;
-  init|next|escalate|notify|status|list|report|services) c=$1; shift; "cmd_$c" "$@";;
+  init|next|escalate|notify|status|list|report|services|verify|hide|reveal) c=$1; shift; "cmd_$c" "$@";;
   *) cat <<EOF
 usage: craftman-state <command>
-  init <run-id> [--profile full|lite] [--from STAGE] [--to STAGE] [--skip-deploy] [--lead] [--max-agent-calls N] [--requirement TEXT]
+  init <run-id> [--profile full|lite|bugfix] [--from STAGE] [--to STAGE] [--skip-deploy] [--lead] [--max-agent-calls N] [--requirement TEXT]
   next [run-id]              next pending step
   done <step> [note]         mark step done (active run); gates need their passing verdict or grant
   skip <step> <reason>       mark step skipped (gates need a human waiver)
-  profile lite               switch the active run to the lite profile
+  profile lite|bugfix        switch the active run to that profile (needs the planner's size / the agreed kind on disk)
+  verify tests|hidden [--limit SECS]
+                             run the test command (from 04-context.md) or the hidden suite here, record verify/<name>-<n>.md;
+                             engineering is done only with both passing (CRAFTMAN_VERIFY_LIMIT, default 900s)
+  hide | reveal              pack the hidden suite away before engineering / unpack it for a fix round or for QA
   set branch|packages_done <value>
   escalate <text>            log an escalation and notify the human
   notify [text]              desktop notification during an active run (CRAFTMAN_NOTIFY=off disables)

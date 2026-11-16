@@ -25,6 +25,7 @@ Work package, `workdir`, architecture path, context path (commands), standards f
 7. **Test runs.** While iterating, run only this package's tests with the context's `fast_test_command` (or the test command with `-x` and the package's test paths). Run the full suite once at the end.
 8. Don't stop to ask questions. When the design leaves a detail open, choose the option the standards favour, record it under `## Assumptions`, and carry on. Stop with `status: blocked` only when the package cannot be built without an answer.
 9. Work only inside `workdir`.
+10. A failing acceptance test reaches you as its name and a one-line reason: that suite is hidden from you on purpose, and a hook refuses any attempt to read it. Fix the behavior the acceptance criterion names; never guess at the test.
 
 ## Body
 Test files and the AC-to-test mapping; the red run excerpt; test changes after red, with reasons; files changed and each new module's layer; test, lint and typecheck results; `## Assumptions`; deviations from the design; points for the reviewer.
