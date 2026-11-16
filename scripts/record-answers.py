@@ -21,19 +21,31 @@ def who():
 
 @contextlib.contextmanager
 def state_lock(root):
-    """Same lock as craftman-state and the budget hook; a stale lock is taken over after ~5s."""
+    """Same lock as craftman-state and the budget hook: a file created with O_EXCL, taken over only when it is itself
+    older than 5s (a crashed holder); a busy one is waited for, up to 60s."""
     lock = os.path.join(root, ".craftman", ".lock")
-    for _ in range(50):
+    if os.path.isdir(lock):   # a directory lock left by a version before 0.8.0
         try:
-            os.mkdir(lock)
+            os.rmdir(lock)
+        except OSError:
+            pass
+    for _ in range(600):
+        try:
+            os.close(os.open(lock, os.O_CREAT | os.O_EXCL | os.O_WRONLY))
             break
         except FileExistsError:
+            try:
+                if time.time() - os.stat(lock).st_mtime >= 5:
+                    os.unlink(lock)
+                    continue
+            except OSError:
+                pass
             time.sleep(0.1)
     try:
         yield
     finally:
         try:
-            os.rmdir(lock)
+            os.unlink(lock)
         except OSError:
             pass
 
