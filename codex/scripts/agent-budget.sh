@@ -4,7 +4,7 @@
 # human-liaison and memory-keeper are always allowed so the human can extend the budget.
 input=$(cat)
 hookcwd=$(printf '%s' "$input" | python3 -c 'import sys,json; print(json.load(sys.stdin).get("cwd",""))' 2>/dev/null)
-root="${CLAUDE_PROJECT_DIR:-$(cd "${hookcwd:-$PWD}" 2>/dev/null && git rev-parse --show-toplevel 2>/dev/null || echo "${hookcwd:-$PWD}")}"
+root="${CLAUDE_PROJECT_DIR:-$(cd "${hookcwd:-$PWD}" 2>/dev/null && c=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && { [ "${c%/.git}" != "$c" ] && echo "${c%/.git}" || git rev-parse --show-toplevel 2>/dev/null; } || echo "${hookcwd:-$PWD}")}"
 active="$root/.craftman/active-run"
 [ -f "$active" ] || exit 0
 # Count new ai-craftman agents and every continuation (a continuation re-reads the agent's whole context).

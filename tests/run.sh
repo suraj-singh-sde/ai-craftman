@@ -381,6 +381,23 @@ grep -q '^granted: deploy' "$MC/approvals.md" && [ ! -f "$MC/pending.md" ] && ok
 HT="$(mktemp -d)"; printf '{"hook_event_name":"SessionStart","cwd":"%s"}' "$P" | PLUGIN_ROOT=/opt/plugins/ai-craftman HOME="$HT" bash "$HERE/scripts/codex-session.sh"
 [ "$(cat "$P/.craftman/.plugin-root")" = /opt/plugins/ai-craftman ] && [ "$(cat "$HT/.codex/ai-craftman.root")" = /opt/plugins/ai-craftman ] && ok "session hook records the plugin root" || bad "session hook records the plugin root"; rm -rf "$HT"
 grep -qx '.agents-active' "$P/.craftman/.gitignore" && grep -qx '.plugin-root' "$P/.craftman/.gitignore" && ok "codex control files git-ignored" || bad "codex control files git-ignored"
+# review fixes: worktree root, pending.md, exact answers, Codex ownership by active agents
+WT="$(mktemp -d)"; (cd "$WT" && git init -q r && cd r && git -c user.email=t@x -c user.name=t commit -q --allow-empty -m i && mkdir -p .craftman/memory/x && echo x > .craftman/active-run && git worktree add -q ../w -b wt)
+expect "guard fires from a worktree" 2 "env -u CLAUDE_PROJECT_DIR bash $G" "$(python3 -c 'import json,sys; print(json.dumps({"cwd":sys.argv[1],"tool_input":{"command":"git push origin main"}}))' "$WT/w")"
+(cd "$WT" && git init -q s && cd s && git -c user.email=t@x -c user.name=t commit -q --allow-empty -m i && mkdir -p .craftman && echo x > .craftman/active-run && git init -q --separate-git-dir "$WT/gitdir" sub >/dev/null 2>&1; true)
+expect "guard fires in a repo whose git dir is elsewhere" 2 "env -u CLAUDE_PROJECT_DIR bash $G" "$(python3 -c 'import json,sys; print(json.dumps({"cwd":sys.argv[1],"tool_input":{"command":"git push origin main"}}))' "$WT/s")"
+rm -rf "$WT"
+expect "pending.md is a control file" 2 "$G" "$(bash_json 'echo x > .craftman/memory/r1/pending.md')"
+craftman-state ask "[APPROVAL:deploy] Deploy?" "Approve|Reject" >/dev/null; rm -f "$MC/approvals.md.x"
+printf '{"hook_event_name":"UserPromptSubmit","prompt":"approve it later, maybe","cwd":"%s"}' "$P" | $R
+[ -f "$MC/pending.md" ] && ok "a longer message is not an answer" || bad "a longer message is not an answer"
+printf '{"hook_event_name":"UserPromptSubmit","prompt":"Reject.","cwd":"%s"}' "$P" | $R; [ ! -f "$MC/pending.md" ] && ok "exact option with punctuation answers" || bad "exact option with punctuation answers"
+printf 'craftman-tdd-engineer\n' > "$P/.craftman/.agents-active"
+expect "no-identity evidence write refused while a builder runs" 2 "$F" "$(cj '{"tool_name":"Write","cwd":"'"$P"'","tool_input":{"file_path":"'"$MC"'/00-triage.md","content":"e2e_mode: none"}}')"
+expect "no-identity test edit refused while an implementer runs" 0 "$F" "$(cj '{"tool_name":"Write","cwd":"'"$P"'","tool_input":{"file_path":"/repo/tests/test_a.py","content":"x"}}')"
+printf 'craftman-code-writer\n' > "$P/.craftman/.agents-active"
+expect "no-identity test edit refused while code-writer runs" 2 "$F" "$(cj '{"tool_name":"Write","cwd":"'"$P"'","tool_input":{"file_path":"/repo/tests/test_a.py","content":"x"}}')"
+: > "$P/.craftman/.agents-active"
 craftman-state resume r1 >/dev/null
 python3 "$HERE/scripts/build-codex.py" --check >/dev/null && ok "codex bundle up to date" || bad "codex bundle up to date (run scripts/build-codex.py)"
 python3 -c 'import json; json.load(open("'"$HERE"'/codex/plugin.json")); json.load(open("'"$HERE"'/codex/hooks/hooks.json")); json.load(open("'"$HERE"'/.agents/plugins/marketplace.json"))' && ok "codex manifests are json" || bad "codex manifests are json"
