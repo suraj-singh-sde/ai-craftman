@@ -20,9 +20,15 @@ if printf '%s' "$input" | grep -Eq '"subagent_type"[[:space:]]*:[[:space:]]*"ai-
     exit 2
   fi
 fi
-# Parallel dispatches run this hook concurrently: take the state lock so no count is lost (stale lock taken over after ~5s).
+# Parallel dispatches run this hook concurrently: take the state lock so no count is lost. A lock is taken over only
+# when it is itself older than 5s (a crashed holder), never because this waiter has queued for 5s: twenty dispatches
+# on a slow runner queue for longer than that, and a waiter that gave up would lose its count.
 lock="$root/.craftman/.lock"; i=0
-until mkdir "$lock" 2>/dev/null; do i=$((i+1)); [ "$i" -ge 50 ] && break; sleep 0.1; done
+until mkdir "$lock" 2>/dev/null; do
+  age=$(( $(date +%s) - $(stat -f %m "$lock" 2>/dev/null || stat -c %Y "$lock" 2>/dev/null || date +%s) ))
+  [ "$age" -lt 5 ] || { rmdir "$lock" 2>/dev/null; continue; }
+  i=$((i+1)); [ "$i" -ge 600 ] && break; sleep 0.1
+done
 trap 'rmdir "$lock" 2>/dev/null' EXIT
 calls=$(sed -n 's/^agent_calls: //p' "$state"); calls=${calls:-0}
 max=$(sed -n 's/^max_agent_calls: //p' "$state"); max=${max:-60}

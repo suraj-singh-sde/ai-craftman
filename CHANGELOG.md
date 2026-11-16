@@ -17,10 +17,15 @@ Four things a run could not do before: tell a bugfix from a feature before plann
 - `craftman-state` keeps its temp files beside the run's files instead of the system temp dir. The plugin eval's sandbox refuses that dir, and in the first 0.8.0 run `hide` and `verify` failed on `mktemp` until the orchestrator shimmed it.
 - Self-check cases for the bugfix switch and its evidence, hide/reveal, verify on a passing, failing and hung suite, the engineering and e2e gates, and the guard on the hidden folder. Two slow evals: `hidden-tests` (the suite is written, verified, packed, never named in a builder prompt, and QA moves it into the repository) and `e2e-local` (the sample app behind a stdlib HTTP front is started and driven by the e2e-verifier). Both run the lite pipeline to QA on `examples/sample-app`.
 
+- Gate evidence is guarded like the control files, from a security review of this release. `verify/*.md` (what the engineering gate reads) can be written only by `craftman-state`: file-guard refuses the write tools and deploy-guard refuses a redirect to them. `00-triage.md`, `04-context.md`, `09a-hidden-tests.md` and `11a-e2e.md` (the headers behind the bugfix switch, the e2e gate and `verify tests`) can be changed only by the agent that owns each one, or by the orchestrator writing a refused agent's output; another agent's Write, Edit or Bash redirect to them is refused. file-guard collapses `..` in paths first, so `.craftman/memory/<run>/../../src/app.py` counts as the source file it is (the e2e-verifier's write guard could be stepped around that way). The trust model is unchanged otherwise: the orchestrator and a command built from variables are not stopped.
+
 ### Changed
 - The acceptance-writer and the e2e-verifier wait for the architecture gates like the engineering agents.
 - QA reads `verify/` and the e2e result, does not repeat the flows the verifier drove, and commits the acceptance suite with its own tests (`test(<run-id>): acceptance and QA suites`).
 - The lite rules (combined design, security-focused review, one package) apply to the bugfix profile too.
+
+### Fixed
+- The agent budget lost counts on a loaded CI runner (the `main` self-check failed on it after the 0.7.0 merge too, while the PR run passed). The state lock was taken over after a waiter had queued for 5 s, so with twenty parallel dispatches a slow holder made a waiter give up the lock and its count. The lock is now taken over only when it is itself older than 5 s (a crashed holder); a busy one is waited for, up to 60 s. The self-check runs 40 parallel dispatches and a stale-lock case.
 
 ## [0.7.0] - 2026-10-03
 

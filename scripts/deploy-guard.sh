@@ -32,7 +32,7 @@ cmd=$(printf '%s' "$cmd" \
 
 block() { echo "AI-Craftman: blocked. $1" >&2; exit 2; }
 
-# Control files are written only by craftman-state and the hooks.
+# Control files are written only by craftman-state and the hooks (verify/*.md hold the test runs the engineering gate reads).
 # One line, with harmless redirects (2>&1, >/dev/null) removed, so reads are not mistaken for writes.
 # Only a complete redirect is removed: ">&2" followed by more text is a file name (">&2026-run/approvals.md" writes it).
 bare=$(printf '%s' "$cmd" | tr '\n' ';' | sed -E 's/[0-9]?>&[0-9-]([[:space:];|&)]|$)/ \1/g; s#[0-9&]?>[[:space:]]*/dev/null([[:space:];|&)]|$)# \1#g')
@@ -43,10 +43,10 @@ case "$raw" in *"
 "*) ;; *) printf '%s' "$raw" | grep -Eq "^[[:space:]]*craftman-state [A-Za-z0-9 _.,:=/@%+()!?*~'\"{}-]*\$" && lone=1;; esac
 # A control file is named in full. Where the command or the shell's directory is inside .craftman (worktrees
 # aside), a glob on the stem counts too (approval?.md, active-ru*); elsewhere test_state*.py is just a test file.
-names='(state|approvals|answers)\.md|active-run'
+names='(state|approvals|answers)\.md|active-run|verify/(tests|hidden)[0-9-]*\.md'
 ctx="$hookcwd $bare"   # a worktree path does not count, unless ".." can lead back out of it
 printf '%s' "$ctx" | grep -q '\.\.' || ctx=$(printf '%s' "$ctx" | sed 's#\.craftman/worktrees##g')
-if printf '%s' "$ctx" | grep -q '\.craftman'; then names="$names|(stat|approv|answer|activ)[A-Za-z.-]*[*?[{]"; fi
+if printf '%s' "$ctx" | grep -q '\.craftman'; then names="$names|(stat|approv|answer|activ|verif)[A-Za-z./-]*[*?[{]"; fi
 if [ "$lone" = 0 ] && printf '%s' "$bare" | grep -Eq "$names" \
    && printf '%s' "$bare" | grep -Eq '(>|tee |sed -i|perl -i|python|node |ruby |cp |mv |rm |ln |truncate|dd )'; then
   block "Run control files (state.md, approvals.md, answers.md, active-run) may only change through craftman-state or the human's answers."

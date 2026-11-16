@@ -2,7 +2,9 @@
 """PreToolUse(Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob|Bash) during an active AI-Craftman run.
 
 Blocks (exit 2):
-- edits to run control files (state.md, approvals.md, answers.md, active-run)
+- edits to run control files (state.md, approvals.md, answers.md, active-run, verify/*.md: only craftman-state writes those)
+- edits to a gate's evidence file (00-triage, 04-context, 09a-hidden-tests, 11a-e2e) by an agent other than the one that
+  owns it, through a write tool or a Bash redirect; the orchestrator may still write a refused agent's output
 - secrets written anywhere under .craftman/
 - test-file edits by code-writer / code-optimizer (tests are the spec)
 - any access to the hidden acceptance suite (.craftman/hidden), or to the craftman-state commands that unpack it,
@@ -12,7 +14,12 @@ Blocks (exit 2):
 import json, os, re, sys
 
 WRITE_TOOLS = {"Write", "Edit", "MultiEdit", "NotebookEdit"}
-CONTROL = re.compile(r"\.craftman/(active-run|memory/[^/]+/(state|approvals|answers)\.md)$")
+CONTROL = re.compile(r"\.craftman/(active-run|memory/[^/]+/((state|approvals|answers)\.md|verify/[^/]+))$")
+# gate evidence the state machine reads (kind, e2e_mode, test_command, RED_CONFIRMED, PASS): one agent writes each file
+EVIDENCE = re.compile(r"\.craftman/memory/[^/]+/(00-triage|04-context|09a-hidden-tests|11a-e2e)(-\d+)?\.md")
+OWNER = {"00-triage": "triage", "04-context": "enterprise-context", "09a-hidden-tests": "acceptance-writer", "11a-e2e": "e2e-verifier"}
+# a Bash command that can write a named file (reads such as cat and grep pass); harmless redirects are removed first
+WRITES = re.compile(r"(>|\btee |sed -i|perl -i|\bcp |\bmv |\brm |\bln |truncate|\bdd )")
 SECRETS = [
     re.compile(p) for p in (
         r"AKIA[0-9A-Z]{16}",
@@ -41,6 +48,12 @@ def block(msg):
     sys.exit(2)
 
 
+def foreign_evidence(agent, text):
+    """The evidence file named in text that this agent does not own, or None."""
+    m = EVIDENCE.search(text)
+    return m.group(1) if m and agent and not agent.endswith(OWNER[m.group(1)]) else None
+
+
 def strings(x):
     """Every string in a tool input, however nested (file_path, pattern, command, edits[].new_string...)."""
     if isinstance(x, str):
@@ -65,13 +78,24 @@ def main():
         block(f"{agent} may not touch the hidden acceptance suite. A failing acceptance test reaches you as its name "
               "and a one-line reason; fix the behavior the acceptance criterion names.")
 
+    if data.get("tool_name") == "Bash":
+        cmd = re.sub(r"\d?>&[\d-]|\d?>\s*/dev/null", " ", ti.get("command") or "")
+        name = foreign_evidence(agent, cmd)
+        if name and WRITES.search(cmd):
+            block(f"{name}.md is gate evidence written by {OWNER[name]}; {agent} may read it, not change it.")
+        return
     if data.get("tool_name") not in WRITE_TOOLS:
         return
-    path = (ti.get("file_path") or ti.get("notebook_path") or "").replace("\\", "/")
+    # ".." is collapsed first, so ".craftman/memory/r/../../src/app.py" is seen as the source file it is
+    path = os.path.normpath((ti.get("file_path") or ti.get("notebook_path") or "").replace("\\", "/"))
     in_craftman = "/.craftman/" in path or path.startswith(".craftman/")
 
     if CONTROL.search(path):
         block("Run control files change only through craftman-state or the human's recorded answers.")
+
+    name = foreign_evidence(agent, path)
+    if name:
+        block(f"{name}.md is gate evidence written by {OWNER[name]}; {agent} may read it, not change it.")
 
     if agent.endswith("e2e-verifier") and not in_craftman:
         block(f"e2e-verifier writes only its evidence under .craftman/ ({path} is not). It drives the app and reports "
