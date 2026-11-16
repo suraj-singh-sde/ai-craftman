@@ -86,7 +86,13 @@ craftman-state done design >/dev/null 2>&1 && ok "valid diagrams accepted" || ba
 # stale-lock age (each holder is slowed down here, as on a loaded CI runner)
 c0=$(sed -n 's/^agent_calls: //p' "$M3/state.md")
 for _ in $(seq 40); do aj architect | "$HERE/scripts/agent-budget.sh" & done; wait
-[ "$(sed -n 's/^agent_calls: //p' "$M3/state.md")" = $((c0+40)) ] && ok "parallel dispatches all counted" || bad "parallel dispatches all counted"
+c1=$(sed -n 's/^agent_calls: //p' "$M3/state.md")
+[ "$c1" = $((c0+40)) ] && ok "parallel dispatches all counted (pipelines)" || bad "parallel dispatches all counted (pipelines: $c0 -> $c1)"
+DBG="$(mktemp -d)"
+for k in $(seq 40); do ( aj architect | "$HERE/scripts/agent-budget.sh" > "$DBG/$k.out" 2> "$DBG/$k.err"; echo "exit=$?" >> "$DBG/$k.err" ) & done; wait
+c2=$(sed -n 's/^agent_calls: //p' "$M3/state.md")
+[ "$c2" = $((c1+40)) ] && ok "parallel dispatches all counted (subshells)" || { bad "parallel dispatches all counted (subshells: $c1 -> $c2)"; cat "$DBG"/*.err | sort | uniq -c | sort -rn | head; }
+rm -rf "$DBG"
 mkdir -p "$CLAUDE_PROJECT_DIR/.craftman/.lock"; touch -t 202001010000 "$CLAUDE_PROJECT_DIR/.craftman/.lock"
 c0=$(sed -n 's/^agent_calls: //p' "$M3/state.md"); aj architect | "$HERE/scripts/agent-budget.sh"
 [ "$(sed -n 's/^agent_calls: //p' "$M3/state.md")" = $((c0+1)) ] && [ ! -d "$CLAUDE_PROJECT_DIR/.craftman/.lock" ] && ok "stale lock taken over" || bad "stale lock taken over"
