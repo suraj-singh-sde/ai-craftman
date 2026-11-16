@@ -2,6 +2,11 @@
 
 All notable changes to this project are documented here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
+## [0.8.1] - 2026-11-16
+
+### Added
+- Library docs from [context7](https://github.com/upstash/context7) when a server is connected (the official `context7` plugin, or `npx ctx7 setup --claude`). `research-agent` resolves the library and queries its docs for the version in the lockfile before it searches the web; `architect` reads the docs before every library, version or API decision and cites them next to it, or raises a `[research]` question. Both agents list the tools under the two names the harness can give them (`mcp__context7__*`, `mcp__plugin_context7_context7__*`) and fall back to the web without a server. No new dependency for the plugin itself.
+
 ## [0.8.0] - 2026-11-16
 
 Four things a run could not do before: tell a bugfix from a feature before planning it, keep a set of tests the builders cannot see, prove a suite passed instead of believing an agent, and start the finished app. Proven on two lite runs to QA on `examples/sample-app`: the library (17 agent calls, 17 min, 5 USD; e2e not applicable) and the same app behind a stdlib HTTP front (22 calls, 30 min, 7 USD; the e2e-verifier drove 12 acceptance criteria against the running server, shifting its clock through a `sitecustomize` shim rather than touching the code).

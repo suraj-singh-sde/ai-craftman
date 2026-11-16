@@ -364,6 +364,8 @@ for s in $(sed -n 's/^  - ai-craftman://p' "$HERE"/agents/*.md | sort -u); do
   [ -f "$HERE/skills/$s/SKILL.md" ] || bad "missing skill $s"
 done
 ok "agent skills exist"
+# library docs come from a context7 server when one is connected, under either tool name the harness gives it
+for a in research-agent architect; do grep -q "^tools: .*mcp__context7__query-docs.*mcp__plugin_context7_context7__query-docs" "$HERE/agents/$a.md" || bad "context7 tools in $a"; done; ok "docs tools listed under both names"
 # the triage header is read by the gates (profile bugfix, e2e), so its agent must be told the exact keys
 grep -q '^e2e_mode: container | local | none' "$HERE/agents/triage.md" && grep -q '^kind: feature | bugfix' "$HERE/agents/triage.md" && ok "triage spells out its header keys" || bad "triage spells out its header keys"
 
