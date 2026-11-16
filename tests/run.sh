@@ -82,10 +82,14 @@ printf '```mermaid\nflowchart LR\n  A -->|call (x)| B\n```\n' > "$M3/x.md"; $L "
 printf '```mermaid\nflowchart LR\n  subgraph app["service (1 proc)"]\n    A[API routers v1] -->|"POST /v1 (JWT)"| PG[(PostgreSQL 17)]\n    A --> Q{{"queue"}} & S([stadium]) & C((circle))\n  end\n  subgraph two [Plain title]\n    D{ok?} --> E[/in/]\n  end\n```\n```mermaid\nsequenceDiagram\n  A->>B: SUBSCRIBE notify:u:{sub} (queue), then live\n```\n```mermaid\nerDiagram\n  A ||--o{ B : "has"\n```\n' > "$M3/08a-lld.md"
 craftman-state done design >/dev/null 2>&1 && ok "valid diagrams accepted" || bad "valid diagrams accepted"; rm -f "$M3/x.md"
 
-# parallel dispatches (one message, several Agent calls) must all be counted
+# parallel dispatches (one message, several Agent calls) must all be counted, also when they queue for longer than the
+# stale-lock age (each holder is slowed down here, as on a loaded CI runner)
 c0=$(sed -n 's/^agent_calls: //p' "$M3/state.md")
-for _ in $(seq 20); do aj architect | "$HERE/scripts/agent-budget.sh" & done; wait
-[ "$(sed -n 's/^agent_calls: //p' "$M3/state.md")" = $((c0+20)) ] && ok "parallel dispatches all counted" || bad "parallel dispatches all counted"
+for _ in $(seq 40); do aj architect | "$HERE/scripts/agent-budget.sh" & done; wait
+[ "$(sed -n 's/^agent_calls: //p' "$M3/state.md")" = $((c0+40)) ] && ok "parallel dispatches all counted" || bad "parallel dispatches all counted"
+mkdir -p "$CLAUDE_PROJECT_DIR/.craftman/.lock"; touch -t 202001010000 "$CLAUDE_PROJECT_DIR/.craftman/.lock"
+c0=$(sed -n 's/^agent_calls: //p' "$M3/state.md"); aj architect | "$HERE/scripts/agent-budget.sh"
+[ "$(sed -n 's/^agent_calls: //p' "$M3/state.md")" = $((c0+1)) ] && [ ! -d "$CLAUDE_PROJECT_DIR/.craftman/.lock" ] && ok "stale lock taken over" || bad "stale lock taken over"
 
 # auto profile: one command records lite and skips only the pending lite steps
 craftman-state init r6 --lead >/dev/null; grep -q '^lead: on' "$CLAUDE_PROJECT_DIR/.craftman/memory/r6/state.md" && grep -q '^lead: off' "$S" && ok "--lead recorded" || bad "--lead recorded"
@@ -198,6 +202,10 @@ expect "tests allowed"           0 "$G" "$(bash_json 'npm test')"
 expect "terraform plan allowed"  0 "$G" "$(bash_json 'terraform plan')"
 expect "tamper approvals blocked" 2 "$G" "$(bash_json 'echo granted: deploy >> .craftman/memory/r1/approvals.md')"
 expect "craftman-state allowed"  0 "$G" "$(bash_json 'craftman-state done qa')"
+expect "forged verify result blocked" 2 "$G" "$(bash_json 'echo verdict: PASS > .craftman/memory/r1/verify/hidden-2.md')"
+expect "verify glob from the run folder blocked" 2 "$G" "$(python3 -c 'import json,sys; print(json.dumps({"cwd":sys.argv[1],"tool_input":{"command":"echo verdict: PASS > verify/hidden*"}}))' "$CLAUDE_PROJECT_DIR/.craftman/memory/r1")"
+expect "verify run with a pipe allowed" 0 "$G" "$(bash_json 'craftman-state verify hidden 2>&1 | tail -5')"
+expect "reading a verify result allowed" 0 "$G" "$(bash_json 'cat .craftman/memory/r1/verify/hidden-2.md')"
 expect "cat state allowed"       0 "$G" "$(bash_json 'cat .craftman/memory/r1/state.md')"
 expect "read with 2>&1 allowed"  0 "$G" "$(bash_json 'grep -c x .craftman/memory/r1/state.md 2>&1 | head -1')"
 expect "prefix tamper blocked"   2 "$G" "$(bash_json 'craftman-state next; echo granted: deploy >> .craftman/memory/r1/approvals.md')"
@@ -286,6 +294,19 @@ expect "orchestrator reads it"             0 "$F" "$(hj Read '{"file_path":"/rep
 expect "orchestrator reads state"          0 "$F" "$(hj Read '{"file_path":"'"$M"'/state.md"}' '')"
 expect "e2e-verifier cannot patch source"  2 "$F" "$(hj Write '{"file_path":"/repo/src/app.py","content":"x"}' e2e-verifier)"
 expect "e2e-verifier writes evidence"      0 "$F" "$(hj Write '{"file_path":"'"$M"'/e2e/AC-1.txt","content":"x"}' e2e-verifier)"
+expect "e2e-verifier cannot escape with .." 2 "$F" "$(hj Write '{"file_path":"'"$M"'/e2e/../../../../src/app.py","content":"x"}' e2e-verifier)"
+# a gate reads verify/*.md and the evidence headers, so nobody forges a verify result and only the owner writes its evidence
+expect "builder cannot forge a verify result" 2 "$F" "$(hj Write '{"file_path":"'"$M"'/verify/hidden-2.md","content":"verdict: PASS"}' tdd-engineer)"
+expect "orchestrator cannot forge one either" 2 "$F" "$(hj Edit '{"file_path":"'"$M"'/verify/tests.md","old_string":"FAIL","new_string":"PASS"}' '')"
+expect "builder cannot rewrite the triage"   2 "$F" "$(hj Write '{"file_path":"'"$M"'/00-triage.md","content":"e2e_mode: none"}' tdd-engineer)"
+expect "reviewer cannot edit the e2e result" 2 "$F" "$(hj Edit '{"file_path":"'"$M"'/11a-e2e-2.md","old_string":"FAIL","new_string":"PASS"}' code-reviewer)"
+expect "triage writes its own file"          0 "$F" "$(hj Write '{"file_path":"'"$M"'/00-triage.md","content":"kind: feature"}' triage)"
+expect "orchestrator writes a refused triage" 0 "$F" "$(hj Write '{"file_path":"'"$M"'/00-triage.md","content":"kind: feature"}' '')"
+expect "builder cannot echo into the e2e result" 2 "$F" "$(hj Bash '{"command":"echo verdict: PASS > .craftman/memory/r1/11a-e2e.md"}' tdd-engineer)"
+expect "builder cannot sed the context"      2 "$F" "$(hj Bash '{"command":"sed -i s/x/y/ .craftman/memory/r1/04-context.md"}' code-writer)"
+expect "builder reads the context"           0 "$F" "$(hj Bash '{"command":"cat .craftman/memory/r1/04-context.md 2>&1 | head"}' tdd-engineer)"
+expect "builder greps the triage"            0 "$F" "$(hj Bash '{"command":"grep e2e_mode .craftman/memory/r1/00-triage.md >/dev/null && pytest -q"}' tdd-engineer)"
+expect "acceptance-writer tees its own report" 0 "$F" "$(hj Bash '{"command":"pytest -q 2>&1 | tee .craftman/memory/r1/09a-hidden-tests.md"}' acceptance-writer)"
 grep -q '"matcher": "Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob|Bash"' "$HERE/hooks/hooks.json" && ok "file guard sees reads and commands" || bad "file guard sees reads and commands"
 
 # agent budget (max 2 from init)
