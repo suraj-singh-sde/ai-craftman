@@ -41,26 +41,27 @@ bare=$(printf '%s' "$cmd" | tr '\n' ';' | sed -E 's/[0-9]?>&[0-9-]([[:space:];|&
 lone=0
 case "$raw" in *"
 "*) ;; *) printf '%s' "$raw" | grep -Eq "^[[:space:]]*craftman-state [A-Za-z0-9 _.,:=/@%+()!?*~'\"{}-]*\$" && lone=1;; esac
-# A control file is named in full. Where the command or the shell's directory is inside .craftman (worktrees
-# aside), a glob on the stem counts too (approval?.md, active-ru*); elsewhere test_state*.py is just a test file.
+# A control file is named in full, case-insensitively (a Mac's file system is). Where the command or the shell's
+# directory is inside .craftman (worktrees aside), no write may use a glob at all (tee 0* from the run folder would
+# overwrite the evidence files); elsewhere test_state*.py is just a test file.
 names='(state|approvals|answers)\.md|active-run|verify/[^ ;|&]+'
 writes='(>|tee |sed -i|perl -i|python|node |ruby |cp |mv |rm |ln |truncate|dd )'
 ctx="$hookcwd $bare"   # a worktree path does not count, unless ".." can lead back out of it
 printf '%s' "$ctx" | grep -q '\.\.' || ctx=$(printf '%s' "$ctx" | sed 's#\.craftman/worktrees##g')
-if printf '%s' "$ctx" | grep -q '\.craftman'; then names="$names|(stat|approv|answer|activ|verif)[A-Za-z./-]*[*?[{]"; fi
-if [ "$lone" = 0 ] && printf '%s' "$bare" | grep -Eq "$names" && printf '%s' "$bare" | grep -Eq "$writes"; then
+if [ "$lone" = 0 ] && printf '%s' "$bare" | grep -Eqi "$names" && printf '%s' "$bare" | grep -Eq "$writes"; then
   block "Run control files (state.md, approvals.md, answers.md, active-run, verify/) may only change through craftman-state or the human's answers."
 fi
+if [ "$lone" = 0 ] && printf '%s' "$ctx" | grep -q '\.craftman' && printf '%s' "$bare" | grep -Eq "$writes" && printf '%s' "$bare" | grep -q '[*?[{]'; then
+  block "A command that can write inside .craftman/ must name its files: no globs there (the run's control and evidence files sit next to each other)."
+fi
 # Gate evidence (the headers and verdicts the state machine reads) has one writer each. Another agent's command that can
-# write it is refused; the orchestrator (no agent type) may write a refused agent's output. Same matching as above:
-# the full name, or a glob on its stem from inside .craftman; case-insensitive, as a Mac's file system is.
+# write it is refused; the orchestrator (no agent type) may write a refused agent's output. The full name,
+# case-insensitively; a glob is already refused above.
 if [ -n "$agent" ] && [ "$lone" = 0 ] && printf '%s' "$bare" | grep -Eq "$writes"; then
   for pair in 00-triage:triage 01-requirements:requirements-planner 04-context:enterprise-context 09a-hidden-tests:acceptance-writer 11a-e2e:e2e-verifier; do
     file=${pair%%:*}; owner=${pair#*:}
     case "$agent" in *"$owner") continue;; esac
-    pat="$file(-[0-9]+)?\.md"
-    if printf '%s' "$ctx" | grep -q '\.craftman'; then pat="$pat|${file:0:6}[A-Za-z0-9.-]*[*?[{]"; fi
-    printf '%s' "$bare" | grep -Eqi "$pat" && block "$file.md is gate evidence written by $owner; $agent may read it, not change it."
+    printf '%s' "$bare" | grep -Eqi "$file(-[0-9]+)?\.md" && block "$file.md is gate evidence written by $owner; $agent may read it, not change it."
   done
 fi
 # Deleting or moving .craftman would erase the audit trail and switch these guards off (so would git clean -x:
