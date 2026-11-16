@@ -11,7 +11,7 @@ input=$(cat)
 out=$(printf '%s' "$input" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("cwd","")); print(d.get("agent_type","")); print(d.get("tool_input",{}).get("command",""))' 2>/dev/null) \
   && { hookcwd=$(printf '%s' "$out" | sed -n 1p); agent=$(printf '%s' "$out" | sed -n 2p); cmd=$(printf '%s' "$out" | tail -n +3); decoded=1; } || { hookcwd=""; agent=""; cmd="$input"; decoded=0; }
 # The project root: CLAUDE_PROJECT_DIR (Claude Code), else the repository that holds the hook's cwd (Codex).
-root="${CLAUDE_PROJECT_DIR:-$(cd "${hookcwd:-$PWD}" 2>/dev/null && c=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && echo "${c%/.git}" || echo "${hookcwd:-$PWD}")}"
+root="${CLAUDE_PROJECT_DIR:-$(cd "${hookcwd:-$PWD}" 2>/dev/null && c=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && { [ "${c%/.git}" != "$c" ] && echo "${c%/.git}" || git rev-parse --show-toplevel 2>/dev/null; } || echo "${hookcwd:-$PWD}")}"
 active="$root/.craftman/active-run"
 [ -f "$active" ] || exit 0
 run=$(cat "$active")

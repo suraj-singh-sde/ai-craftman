@@ -61,7 +61,10 @@ def project_root(data):
     cwd = data.get("cwd") or os.getcwd()
     try:
         top = subprocess.run(["git", "rev-parse", "--path-format=absolute", "--git-common-dir"], cwd=cwd, capture_output=True, text=True, timeout=5).stdout.strip()
-        top = top[:-5] if top.endswith("/.git") else ""
+        if top.endswith("/.git"):
+            top = top[:-5]
+        else:   # a bare repo or a submodule: the common dir is not "<root>/.git"
+            top = subprocess.run(["git", "rev-parse", "--show-toplevel"], cwd=cwd, capture_output=True, text=True, timeout=5).stdout.strip()
     except Exception:
         top = ""
     return top or cwd

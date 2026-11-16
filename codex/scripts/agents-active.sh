@@ -4,7 +4,7 @@
 # lead is active, the hidden suite is off limits to every tool call.
 input=$(cat)
 read -r hookcwd event agent < <(printf '%s' "$input" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("cwd","") or ".", d.get("hook_event_name",""), d.get("agent_type","") or "-")' 2>/dev/null) || exit 0
-root="${CLAUDE_PROJECT_DIR:-$(cd "$hookcwd" 2>/dev/null && c=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && echo "${c%/.git}" || echo "$hookcwd")}"
+root="${CLAUDE_PROJECT_DIR:-$(cd "$hookcwd" 2>/dev/null && c=$(git rev-parse --path-format=absolute --git-common-dir 2>/dev/null) && { [ "${c%/.git}" != "$c" ] && echo "${c%/.git}" || git rev-parse --show-toplevel 2>/dev/null; } || echo "$hookcwd")}"
 [ -f "$root/.craftman/active-run" ] || exit 0
 f="$root/.craftman/.agents-active"
 case "$event" in

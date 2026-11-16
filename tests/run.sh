@@ -384,6 +384,8 @@ grep -qx '.agents-active' "$P/.craftman/.gitignore" && grep -qx '.plugin-root' "
 # review fixes: worktree root, pending.md, exact answers, Codex ownership by active agents
 WT="$(mktemp -d)"; (cd "$WT" && git init -q r && cd r && git -c user.email=t@x -c user.name=t commit -q --allow-empty -m i && mkdir -p .craftman/memory/x && echo x > .craftman/active-run && git worktree add -q ../w -b wt)
 expect "guard fires from a worktree" 2 "env -u CLAUDE_PROJECT_DIR bash $G" "$(python3 -c 'import json,sys; print(json.dumps({"cwd":sys.argv[1],"tool_input":{"command":"git push origin main"}}))' "$WT/w")"
+(cd "$WT" && git init -q s && cd s && git -c user.email=t@x -c user.name=t commit -q --allow-empty -m i && mkdir -p .craftman && echo x > .craftman/active-run && git init -q --separate-git-dir "$WT/gitdir" sub >/dev/null 2>&1; true)
+expect "guard fires in a repo whose git dir is elsewhere" 2 "env -u CLAUDE_PROJECT_DIR bash $G" "$(python3 -c 'import json,sys; print(json.dumps({"cwd":sys.argv[1],"tool_input":{"command":"git push origin main"}}))' "$WT/s")"
 rm -rf "$WT"
 expect "pending.md is a control file" 2 "$G" "$(bash_json 'echo x > .craftman/memory/r1/pending.md')"
 craftman-state ask "[APPROVAL:deploy] Deploy?" "Approve|Reject" >/dev/null; rm -f "$MC/approvals.md.x"
