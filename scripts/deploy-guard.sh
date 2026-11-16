@@ -14,8 +14,8 @@ approvals="$root/.craftman/memory/$run/approvals.md"
 
 # Exact command (and the shell's directory) via python; without python, match against the whole payload
 # (over-blocks, never under-blocks).
-out=$(printf '%s' "$input" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("cwd","")); print(d.get("tool_input",{}).get("command",""))' 2>/dev/null) \
-  && { hookcwd=$(printf '%s' "$out" | head -1); cmd=$(printf '%s' "$out" | tail -n +2); decoded=1; } || { hookcwd=""; cmd="$input"; decoded=0; }
+out=$(printf '%s' "$input" | python3 -c 'import sys,json; d=json.load(sys.stdin); print(d.get("cwd","")); print(d.get("agent_type","")); print(d.get("tool_input",{}).get("command",""))' 2>/dev/null) \
+  && { hookcwd=$(printf '%s' "$out" | sed -n 1p); agent=$(printf '%s' "$out" | sed -n 2p); cmd=$(printf '%s' "$out" | tail -n +3); decoded=1; } || { hookcwd=""; agent=""; cmd="$input"; decoded=0; }
 [ -n "$cmd" ] || { cmd="$input"; decoded=0; }
 raw=$cmd
 # Match what bash will run, not how it was typed. $cmd is only matched, never executed.
@@ -43,13 +43,25 @@ case "$raw" in *"
 "*) ;; *) printf '%s' "$raw" | grep -Eq "^[[:space:]]*craftman-state [A-Za-z0-9 _.,:=/@%+()!?*~'\"{}-]*\$" && lone=1;; esac
 # A control file is named in full. Where the command or the shell's directory is inside .craftman (worktrees
 # aside), a glob on the stem counts too (approval?.md, active-ru*); elsewhere test_state*.py is just a test file.
-names='(state|approvals|answers)\.md|active-run|verify/(tests|hidden)[0-9-]*\.md'
+names='(state|approvals|answers)\.md|active-run|verify/[^ ;|&]+'
+writes='(>|tee |sed -i|perl -i|python|node |ruby |cp |mv |rm |ln |truncate|dd )'
 ctx="$hookcwd $bare"   # a worktree path does not count, unless ".." can lead back out of it
 printf '%s' "$ctx" | grep -q '\.\.' || ctx=$(printf '%s' "$ctx" | sed 's#\.craftman/worktrees##g')
 if printf '%s' "$ctx" | grep -q '\.craftman'; then names="$names|(stat|approv|answer|activ|verif)[A-Za-z./-]*[*?[{]"; fi
-if [ "$lone" = 0 ] && printf '%s' "$bare" | grep -Eq "$names" \
-   && printf '%s' "$bare" | grep -Eq '(>|tee |sed -i|perl -i|python|node |ruby |cp |mv |rm |ln |truncate|dd )'; then
-  block "Run control files (state.md, approvals.md, answers.md, active-run) may only change through craftman-state or the human's answers."
+if [ "$lone" = 0 ] && printf '%s' "$bare" | grep -Eq "$names" && printf '%s' "$bare" | grep -Eq "$writes"; then
+  block "Run control files (state.md, approvals.md, answers.md, active-run, verify/) may only change through craftman-state or the human's answers."
+fi
+# Gate evidence (the headers and verdicts the state machine reads) has one writer each. Another agent's command that can
+# write it is refused; the orchestrator (no agent type) may write a refused agent's output. Same matching as above:
+# the full name, or a glob on its stem from inside .craftman; case-insensitive, as a Mac's file system is.
+if [ -n "$agent" ] && [ "$lone" = 0 ] && printf '%s' "$bare" | grep -Eq "$writes"; then
+  for pair in 00-triage:triage 01-requirements:requirements-planner 04-context:enterprise-context 09a-hidden-tests:acceptance-writer 11a-e2e:e2e-verifier; do
+    file=${pair%%:*}; owner=${pair#*:}
+    case "$agent" in *"$owner") continue;; esac
+    pat="$file(-[0-9]+)?\.md"
+    if printf '%s' "$ctx" | grep -q '\.craftman'; then pat="$pat|${file:0:6}[A-Za-z0-9.-]*[*?[{]"; fi
+    printf '%s' "$bare" | grep -Eqi "$pat" && block "$file.md is gate evidence written by $owner; $agent may read it, not change it."
+  done
 fi
 # Deleting or moving .craftman would erase the audit trail and switch these guards off (so would git clean -x:
 # active-run is git-ignored). One worktree folder may be removed, but never through a path with "..".

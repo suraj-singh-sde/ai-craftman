@@ -129,11 +129,13 @@ design_ok() { # design_ok <dir> <file-prefix> <diagrams>: the design has its mer
   local problems; problems=$(python3 "$REPORT" --lint "$1/$2"*.md 2>/dev/null) \
     || die "$2.md has diagrams that will not render; have the architect fix them in place:"$'\n'"$problems"
 }
-latest() { # newest result of a gate: <prefix>.md is round 1, <prefix>-<n>.md is round n
-  local f n best="" top=0
-  for f in "$1"*.md; do
+latest() { # newest result of a gate: <prefix>.md is round 1, <prefix>-<n>.md is round n. Nothing else is a result:
+  # the guards protect exactly these names, so a look-alike (11a-e2ex.md, hidden-2x.md) must not be read here
+  local f n best="" top=0 base; base=$(basename "$1")
+  for f in "$1".md "$1"-[0-9]*.md; do
     [ -f "$f" ] || continue
-    n=$(basename "$f" .md); n=${n##*-}; case "$n" in ''|*[!0-9]*) n=1;; esac
+    n=$(basename "$f" .md); n=${n#"$base"}
+    case "$n" in '') n=1;; -*) n=${n#-}; case "$n" in *[!0-9]*) continue;; esac;; *) continue;; esac
     [ "$n" -ge "$top" ] && { best=$f; top=$n; }
   done
   echo "$best"
@@ -142,7 +144,7 @@ granted() { grep -Eq "^granted: $1( |\$)" "$(dirname "$2")/approvals.md" 2>/dev/
 verified() { # engineering is done when craftman-state itself saw the suites pass: the newest verify/tests and verify/hidden
   local dir v; dir=$(dirname "$1")
   granted waiver-engineering "$1" && return 0
-  if grep -Eqs '^test_command: *[^ ]' "$dir"/04-context*.md; then
+  if grep -Eqs '^test_command: *[^ ]' "$(latest "$dir/04-context")"; then
     v=$(latest "$dir/verify/tests"); grep -qs '^verdict: PASS' "$v" || die "engineering needs a passing 'craftman-state verify tests' (newest result: ${v:-none})"
   fi
   if grep -Eq '^- \[x\] hidden-tests( |$)' "$1"; then
@@ -162,7 +164,7 @@ check_gate() { # check_gate <state-file> <step>: refuse unless the step's eviden
     # the suite is packed away before any builder starts; a library has nothing to drive end to end; code is done when
     # craftman-state ran the suites itself
     *) [ "$2" != hidden-tests ] || [ -f "$HID/$(get run "$1")/suite.tgz" ] || die "hidden-tests needs the suite packed first: craftman-state hide"
-       [ "$2" != e2e ] || ! grep -Eqs '^e2e_mode: *none' "$dir"/00-triage*.md || return 0
+       [ "$2" != e2e ] || ! grep -Eqs '^e2e_mode: *none' "$(latest "$dir/00-triage")" || return 0
        [ "$2" != engineering ] || verified "$1"
        g=$(echo "$GATES" | grep "^$2:") || return 0
        prefix=$(echo "$g" | cut -d: -f2); want=$(echo "$g" | cut -d: -f3)
@@ -263,8 +265,8 @@ cmd_profile() { # switch the active run to lite or bugfix once the kind and size
   if ! granted waiver-profile "$f"; then
     [ "$(get profile_set_by "$f")" = default ] || die "the human chose this profile (--profile); switching to $p needs [APPROVAL:waiver-profile]"
     case "$p" in
-      lite) grep -Eqis '^size: *small' "$dir"/01-requirements*.md || die "lite needs 'size: small' in the header of 01-requirements.md, or [APPROVAL:waiver-profile]";;
-      bugfix) grep -Eqis '^kind: *bugfix' "$dir"/00-triage*.md && grep -Eqis '^kind: *bugfix' "$dir"/01-requirements*.md \
+      lite) grep -Eqis '^size: *small' "$(latest "$dir/01-requirements")" || die "lite needs 'size: small' in the header of 01-requirements.md, or [APPROVAL:waiver-profile]";;
+      bugfix) grep -Eqis '^kind: *bugfix' "$(latest "$dir/00-triage")" && grep -Eqis '^kind: *bugfix' "$(latest "$dir/01-requirements")" \
         || die "bugfix needs 'kind: bugfix' in the headers of both 00-triage.md and 01-requirements.md, or [APPROVAL:waiver-profile]";;
     esac
   fi
@@ -302,7 +304,7 @@ cmd_verify() { # verify tests|hidden [--limit SECS]: run the suite here, not in 
   shift || true; [ "${1:-}" != --limit ] || { secs="${2:?seconds}"; shift 2; }
   f=$(state_file); dir=$(dirname "$f")
   case "$name" in
-    tests) cmd=$(sed -n 's/^test_command: *//p' "$dir"/04-context*.md 2>/dev/null | head -1); shown=$cmd
+    tests) cmd=$(latest "$dir/04-context"); [ -z "$cmd" ] || cmd=$(sed -n 's/^test_command: *//p' "$cmd" | head -1); shown=$cmd
       [ -n "$cmd" ] || die "no 'test_command:' in the header of 04-context.md";;
     hidden) h=$(hidden_dir); [ -s "$h/command" ] || die "no hidden suite: the acceptance-writer writes $h/command and the tests first"
       shown=$(head -1 "$h/command"); cmd=$shown

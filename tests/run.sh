@@ -164,6 +164,8 @@ craftman-state done engineering >/dev/null 2>&1; craftman-state resume rh >/dev/
 # e2e: a result or nothing to drive
 craftman-state done e2e >/dev/null 2>&1 && bad "e2e without result refused" || ok "e2e without result refused"
 printf -- '---\nverdict: FAIL\n---\n' > "$MH/11a-e2e.md"; craftman-state done e2e >/dev/null 2>&1 && bad "failed e2e refused" || ok "failed e2e refused"
+printf -- '---\nverdict: PASS\n---\n' > "$MH/11a-e2ex.md"; printf -- '---\nverdict: PASS\n---\n' > "$MH/11a-e2e-2x.md"
+craftman-state done e2e >/dev/null 2>&1 && bad "a look-alike result is not a result" || ok "a look-alike result is not a result"
 printf -- '---\nverdict: PASS\n---\n' > "$MH/11a-e2e-2.md"; craftman-state done e2e >/dev/null 2>&1 && ok "passed e2e accepted" || bad "passed e2e accepted"
 craftman-state init re --profile lite >/dev/null; printf -- '---\ne2e_mode: none\n---\n' > "$CLAUDE_PROJECT_DIR/.craftman/memory/re/00-triage.md"
 craftman-state done e2e >/dev/null 2>&1 && ok "e2e_mode none passes the e2e gate" || bad "e2e_mode none passes the e2e gate"
@@ -302,11 +304,18 @@ expect "builder cannot rewrite the triage"   2 "$F" "$(hj Write '{"file_path":"'
 expect "reviewer cannot edit the e2e result" 2 "$F" "$(hj Edit '{"file_path":"'"$M"'/11a-e2e-2.md","old_string":"FAIL","new_string":"PASS"}' code-reviewer)"
 expect "triage writes its own file"          0 "$F" "$(hj Write '{"file_path":"'"$M"'/00-triage.md","content":"kind: feature"}' triage)"
 expect "orchestrator writes a refused triage" 0 "$F" "$(hj Write '{"file_path":"'"$M"'/00-triage.md","content":"kind: feature"}' '')"
-expect "builder cannot echo into the e2e result" 2 "$F" "$(hj Bash '{"command":"echo verdict: PASS > .craftman/memory/r1/11a-e2e.md"}' tdd-engineer)"
-expect "builder cannot sed the context"      2 "$F" "$(hj Bash '{"command":"sed -i s/x/y/ .craftman/memory/r1/04-context.md"}' code-writer)"
-expect "builder reads the context"           0 "$F" "$(hj Bash '{"command":"cat .craftman/memory/r1/04-context.md 2>&1 | head"}' tdd-engineer)"
-expect "builder greps the triage"            0 "$F" "$(hj Bash '{"command":"grep e2e_mode .craftman/memory/r1/00-triage.md >/dev/null && pytest -q"}' tdd-engineer)"
-expect "acceptance-writer tees its own report" 0 "$F" "$(hj Bash '{"command":"pytest -q 2>&1 | tee .craftman/memory/r1/09a-hidden-tests.md"}' acceptance-writer)"
+expect "reviewer cannot write a look-alike"  2 "$F" "$(hj Write '{"file_path":"'"$M"'/11A-E2E-3.md","content":"verdict: PASS"}' code-reviewer)"
+expect "builder cannot resize the requirements" 2 "$F" "$(hj Edit '{"file_path":"'"$M"'/01-requirements.md","old_string":"medium","new_string":"small"}' tdd-engineer)"
+# the same through Bash goes to deploy-guard, which normalizes the command and knows the interpreters
+expect "builder cannot echo into the e2e result" 2 "$G" "$(hj Bash '{"command":"echo verdict: PASS > .craftman/memory/r1/11a-e2e.md"}' tdd-engineer)"
+expect "builder cannot sed the context"      2 "$G" "$(hj Bash '{"command":"sed -i s/x/y/ .craftman/memory/r1/04-context.md"}' code-writer)"
+expect "builder cannot python into the triage" 2 "$G" "$(hj Bash '{"command":"python3 fix.py .craftman/memory/r1/00-TRIAGE.md"}' code-writer)"
+expect "quotes do not hide an evidence write" 2 "$G" "$(hj Bash '{"command":"echo x > .craftman/memory/r1/11a-e2\"\"e.md"}' tdd-engineer)"
+expect "evidence glob from the run folder blocked" 2 "$G" "$(python3 -c 'import json,sys; print(json.dumps({"cwd":sys.argv[1],"agent_type":"ai-craftman:tdd-engineer","tool_input":{"command":"echo verdict: PASS > 11a-e2*"}}))' "$CLAUDE_PROJECT_DIR/.craftman/memory/r1")"
+expect "builder reads the context"           0 "$G" "$(hj Bash '{"command":"cat .craftman/memory/r1/04-context.md 2>&1 | head"}' tdd-engineer)"
+expect "builder greps the triage"            0 "$G" "$(hj Bash '{"command":"grep e2e_mode .craftman/memory/r1/00-triage.md >/dev/null && pytest -q"}' tdd-engineer)"
+expect "acceptance-writer tees its own report" 0 "$G" "$(hj Bash '{"command":"pytest -q 2>&1 | tee .craftman/memory/r1/09a-hidden-tests.md"}' acceptance-writer)"
+expect "orchestrator writes a refused e2e report" 0 "$G" "$(hj Bash '{"command":"cat > .craftman/memory/r1/11a-e2e.md <<EOF"}' '')"
 grep -q '"matcher": "Write|Edit|MultiEdit|NotebookEdit|Read|Grep|Glob|Bash"' "$HERE/hooks/hooks.json" && ok "file guard sees reads and commands" || bad "file guard sees reads and commands"
 
 # agent budget (max 2 from init)
