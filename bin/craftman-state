@@ -237,7 +237,7 @@ cmd_init() {
   echo "$run" > "$ACTIVE"
   # A committed active-run would switch the guards on for everyone who pulls the branch. The hidden suite stays out of
   # the builders' diffs and commits until QA reveals it.
-  local p; for p in active-run .lock hidden/ 'memory/*/report.html' 'memory/*/report-version.js'; do grep -qxF "$p" "$ROOT/.craftman/.gitignore" 2>/dev/null || echo "$p" >> "$ROOT/.craftman/.gitignore"; done
+  local p; for p in active-run .lock .agents-active .plugin-root hidden/ 'memory/*/report.html' 'memory/*/report-version.js'; do grep -qxF "$p" "$ROOT/.craftman/.gitignore" 2>/dev/null || echo "$p" >> "$ROOT/.craftman/.gitignore"; done
   # What is already running, so the run can stop exactly what it started and nothing else.
   running 2>/dev/null | cut -d' ' -f1,2 > "$dir/services-before.txt" || true
   refresh "$dir/state.md"
@@ -355,6 +355,16 @@ cmd_escalate() {
 }
 # Best-effort desktop notification, so a run that waits on the human is not left unnoticed. Never fails.
 # CRAFTMAN_NOTIFY=off switches it off.
+# A question for the human when the session has no question tool (Codex outside Plan mode): record it, print it, end
+# the turn. The UserPromptSubmit hook matches the human's next message to one of the options and records the answer
+# (an [APPROVAL:<category>] question answered "Approve" becomes a grant), like a question-tool answer.
+cmd_ask() {
+  local f dir; f=$(state_file); dir=$(dirname "$f")
+  [ -n "${1:-}" ] && [ -n "${2:-}" ] || die 'usage: ask "<question>" "<option>|<option>..."'
+  { echo "question: $(oneline "$1")"; echo "options: $(oneline "$2")"; echo "asked: $(now)"; } > "$dir/pending.md"
+  cmd_notify "A question is waiting for your answer"
+  printf '%s\nOptions: %s\nReply with one of the options.\n' "$1" "$2"
+}
 cmd_notify() {
   [ -f "$ACTIVE" ] && [ "${CRAFTMAN_NOTIFY:-on}" != off ] || return 0
   local m="${1:-AI-Craftman is waiting for you}"
@@ -388,7 +398,7 @@ cmd_finish() {
 
 case "${1:-}" in
   done|skip|set|profile|resume|finish) c=$1; shift; lock; "cmd_$c" "$@";;
-  init|next|escalate|notify|status|list|report|services|verify|hide|reveal) c=$1; shift; "cmd_$c" "$@";;
+  init|next|escalate|notify|status|list|report|services|verify|hide|reveal|ask) c=$1; shift; "cmd_$c" "$@";;
   *) cat <<EOF
 usage: craftman-state <command>
   init <run-id> [--profile full|lite|bugfix] [--from STAGE] [--to STAGE] [--skip-deploy] [--lead] [--max-agent-calls N] [--requirement TEXT]
@@ -402,6 +412,7 @@ usage: craftman-state <command>
   hide | reveal              pack the hidden suite away before engineering / unpack it for a fix round or for QA
   set branch|packages_done <value>
   escalate <text>            log an escalation and notify the human
+  ask <question> <opt|opt>   record a question for the human's next message (sessions without a question tool)
   notify [text]              desktop notification during an active run (CRAFTMAN_NOTIFY=off disables)
   status [run-id] | list | resume <run-id> | finish [complete|aborted]
   report [--open] [run-id]   write report.html (status, design diagrams, results), print its path, optionally open it

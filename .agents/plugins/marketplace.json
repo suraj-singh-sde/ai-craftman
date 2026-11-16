@@ -1,0 +1,12 @@
+{
+  "name": "ai-craftman",
+  "interface": { "displayName": "AI-Craftman" },
+  "plugins": [
+    {
+      "name": "ai-craftman",
+      "source": { "source": "git-subdir", "url": "https://github.com/suraj-singh-sde/ai-craftman.git", "path": "./codex", "ref": "main" },
+      "policy": { "installation": "AVAILABLE", "authentication": "ON_INSTALL" },
+      "category": "Developer Tools"
+    }
+  ]
+}

@@ -2,6 +2,17 @@
 
 All notable changes to this project are documented here. Format: [Keep a Changelog](https://keepachangelog.com/en/1.1.0/). Versioning: [SemVer](https://semver.org/).
 
+## [0.9.0] - 2026-11-16
+
+### Added
+- **Codex plugin** (`codex/`), generated from the Claude Code sources by `scripts/build-codex.py` and committed; the self-check fails when it is stale. A marketplace file at `.agents/plugins/marketplace.json` points Codex at it (`codex plugin marketplace add suraj-singh-sde/ai-craftman`). The bundle holds a portable `plugin.json` with the OpenAI overlay (hooks, onboarding skill), the four commands as skills (`$craftman`, `$craftman-init`, `$craftman-status`, `$craftman-resume`) with a Codex notes file in front of the pipeline text, the three preloaded skills, the 25 agents as custom-agent TOML files (`craftman-<name>`, `model_reasoning_effort` from the agent's effort, `shell_tool = false` for the roles that never run commands, the tier noted for the model), `craftman-state`, the hook scripts and the templates.
+- The hooks run under Codex too: the project root comes from the hook's `cwd` when `CLAUDE_PROJECT_DIR` is not set; file-guard checks `apply_patch` patches (every file and added line) like a write; the budget hook counts `spawn_agent` / `Agent` with any of the agent field names and `send_input` / `resume_agent` as continuations, and holds the builders the same way; the answer recorder reads `request_user_input` answers keyed by question id or in order.
+- `craftman-state ask "<question>" "<option>|<option>"` for sessions without a question tool: it records the pending question, the orchestrator ends its turn, and the `UserPromptSubmit` hook matches the human's next message to an option and records it (an `[APPROVAL:...]` question answered "Approve" becomes a grant). An unrelated message leaves the question pending.
+- `scripts/agents-active.sh` on `SubagentStart` / `SubagentStop`: Codex tool hooks do not name the running agent, so file-guard refuses the hidden suite to every tool call while a builder, reviewer or lead is active. The test-file lock, the evidence-ownership rule and the e2e-verifier write rule stay prompt-only under Codex. `scripts/codex-session.sh` on `SessionStart` records the installed plugin's path (`~/.codex/ai-craftman.root`, `.craftman/.plugin-root`) for the skills.
+- `model_tier` and `max_agent_calls` in `templates/governance.md`, read by the Codex orchestrator (Claude Code keeps the plugin settings).
+
+Not yet proven on a real Codex run. The notes name what the first run must confirm: the spawn payload field names, the `request_user_input` answer shape, and `${PLUGIN_ROOT}` for marketplace-installed plugin hooks.
+
 ## [0.8.1] - 2026-11-16
 
 ### Added

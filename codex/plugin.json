@@ -1,0 +1,40 @@
+{
+  "$schema": "https://agent-plugins.org/schemas/1.0.0/plugin.schema.json",
+  "name": "ai-craftman",
+  "version": "0.9.0",
+  "description": "AI-SDLC pipeline: triage, requirements, architecture, hidden acceptance tests, test-first engineering, verified suites, end-to-end checks on the running app, QA and DevOps, driven by an orchestration layer, specialist agents, persistent memory, enforced gates and human oversight.",
+  "author": {
+    "name": "Suraj Singh",
+    "url": "https://github.com/suraj-singh-sde"
+  },
+  "homepage": "https://github.com/suraj-singh-sde/ai-craftman",
+  "repository": "https://github.com/suraj-singh-sde/ai-craftman",
+  "license": "MIT",
+  "keywords": [
+    "sdlc",
+    "orchestration",
+    "agents",
+    "tdd",
+    "devops",
+    "governance",
+    "codex"
+  ],
+  "extensions": {
+    "com.openai": {
+      "hooks": "./hooks/hooks.json",
+      "onboardingSkill": "./skills/craftman-init/SKILL.md",
+      "interface": {
+        "displayName": "AI-Craftman",
+        "shortDescription": "AI-SDLC pipeline: requirements, design, hidden acceptance tests, test-first engineering, verified suites, e2e, QA, DevOps.",
+        "category": "Developer Tools",
+        "capabilities": [
+          "Read",
+          "Write"
+        ],
+        "defaultPrompt": [
+          "$craftman Add password reset via email to the user service"
+        ]
+      }
+    }
+  }
+}

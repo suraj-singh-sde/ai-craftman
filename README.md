@@ -53,6 +53,18 @@ Requirements:
 - optional: `gh` for PRs and issues
 - optional: a [context7](https://github.com/upstash/context7) MCP server (`/plugin install context7@claude-plugins-official`, or `npx ctx7 setup --claude`; a free API key raises its rate limit) for version-exact library docs in design and research
 
+## Codex
+
+The same pipeline runs in OpenAI Codex (the CLI and the ChatGPT desktop app; the IDE extension has no plugins). `codex/` is the Codex plugin, generated from these sources by `scripts/build-codex.py` and committed:
+
+```
+codex plugin marketplace add suraj-singh-sde/ai-craftman
+```
+
+Then `/plugins` in Codex, install **ai-craftman**, start a new session, and run `$craftman-init` in your project (it creates `.craftman/` and copies the 25 agents into `.codex/agents/`). Then `$craftman <requirement>`, `$craftman-status`, `$craftman-resume <run-id>`.
+
+Same in both: the stages, `craftman-state` and its gates, the memory layout and report, the deploy guard, the agent budget and engineering hold, the hidden suite and `verify`. Different (details in `codex/skills/craftman/references/codex-notes.md`): agents are custom agents `craftman-<name>` spawned in natural language; the model tier is set per agent file or with `[agents] default_subagent_model`; `model_tier` and `max_agent_calls` live in `.craftman/governance.md`; questions go through `request_user_input` where the session has it, otherwise `craftman-state ask` plus the human's next message (recorded by a `UserPromptSubmit` hook); Codex hooks do not name the running agent, so the hidden suite is refused to every tool call while a builder is active, and the test-file lock and evidence ownership are prompt-only. Not yet proven on a real Codex run: the notes list what the first run must confirm.
+
 ## Commands
 
 | Command | What it does |

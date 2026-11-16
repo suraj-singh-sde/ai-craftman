@@ -6,6 +6,8 @@ autonomy: medium            # low = approve every gate | medium = risk-based | h
 coverage_threshold: 80      # % line coverage required at the release gate
 max_review_loops: 2         # review/fix loops before escalating to a human
 tracker: none               # none | github | jira: create an issue per work package (needs approval)
+model_tier: balanced        # economy | balanced | max (Codex reads it here; Claude Code uses the plugin setting)
+max_agent_calls: 60         # agent dispatches per run before the human must approve more (Codex; Claude Code: plugin setting)
 
 ## Required at every release
 - Full test suite green; lint and typecheck clean
