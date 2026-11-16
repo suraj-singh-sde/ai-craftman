@@ -345,6 +345,52 @@ Q2='[APPROVAL:budget] Extend the agent budget?'
 printf '%s' "$(python3 -c 'import json,sys; q=sys.argv[1]; print(json.dumps({"tool_input":{"questions":[{"question":q}],"answers":{q:"Approve"}}}))' "$Q2")" | $R
 expect "budget extended" 0 "$B" "$(aj architect)"
 
+# Codex: the same hooks fed Codex's payloads (no agent_type, apply_patch patches, spawn_agent, request_user_input,
+# turn-based answers), the bundle generated from the sources and up to date
+cj() { python3 -c 'import json,sys; print(json.dumps(json.loads(sys.argv[1])))' "$1"; }
+P="$CLAUDE_PROJECT_DIR"
+expect "apply_patch to a control file blocked" 2 "$F" "$(cj '{"tool_name":"apply_patch","cwd":"'"$P"'","tool_input":{"command":"*** Begin Patch\n*** Update File: .craftman/memory/r1/state.md\n@@\n-a\n+b\n*** End Patch"}}')"
+expect "apply_patch with a secret blocked"      2 "$F" "$(cj '{"tool_name":"apply_patch","cwd":"'"$P"'","tool_input":{"command":"*** Begin Patch\n*** Add File: .craftman/memory/r1/notes.md\n+password: hunter2hunter2\n*** End Patch"}}')"
+expect "apply_patch to source allowed"          0 "$F" "$(cj '{"tool_name":"apply_patch","cwd":"'"$P"'","tool_input":{"command":"*** Begin Patch\n*** Update File: src/app.py\n@@\n+x = 1\n*** End Patch"}}')"
+expect "root from the hook cwd without CLAUDE_PROJECT_DIR" 2 "env -u CLAUDE_PROJECT_DIR python3 $HERE/scripts/file-guard.py" "$(cj '{"tool_name":"Write","cwd":"'"$P"'","tool_input":{"file_path":"'"$P"'/.craftman/memory/r1/state.md","content":"x"}}')"
+printf '{"hook_event_name":"SubagentStart","agent_type":"craftman-tdd-engineer","cwd":"%s"}' "$P" | "$HERE/scripts/agents-active.sh"
+grep -qx 'craftman-tdd-engineer' "$P/.craftman/.agents-active" && ok "subagent start recorded" || bad "subagent start recorded"
+expect "hidden suite refused while a builder is active" 2 "$F" "$(cj '{"tool_name":"Read","cwd":"'"$P"'","tool_input":{"file_path":"/repo/.craftman/hidden/r1/t.py"}}')"
+expect "state.md read allowed while a builder is active" 0 "$F" "$(cj '{"tool_name":"Read","cwd":"'"$P"'","tool_input":{"file_path":"'"$P"'/.craftman/memory/r1/state.md"}}')"
+printf '{"hook_event_name":"SubagentStop","agent_type":"craftman-tdd-engineer","cwd":"%s"}' "$P" | "$HERE/scripts/agents-active.sh"
+[ ! -s "$P/.craftman/.agents-active" ] && ok "subagent stop recorded" || bad "subagent stop recorded"
+expect "hidden suite open again once builders stopped" 0 "$F" "$(cj '{"tool_name":"Read","cwd":"'"$P"'","tool_input":{"file_path":"/repo/.craftman/hidden/r1/t.py"}}')"
+expect "agents-active is a control file" 2 "$G" "$(bash_json 'echo > .craftman/.agents-active')"
+craftman-state init rc --max-agent-calls 10 >/dev/null; MC="$P/.craftman/memory/rc"
+expect "codex spawn counted" 0 "$B" '{"tool_name":"spawn_agent","cwd":"'"$P"'","tool_input":{"agent_type":"craftman-architect","message":"x"}}'
+expect "codex Agent alias counted" 0 "$B" '{"tool_name":"Agent","tool_input":{"agent":"craftman-governance"}}'
+expect "codex continuation counted" 0 "$B" '{"tool_name":"send_input","tool_input":{"id":"abc","message":"x"}}'
+[ "$(sed -n 's/^agent_calls: //p' "$MC/state.md")" = 3 ] && ok "codex dispatches all counted" || bad "codex dispatches all counted"
+expect "codex builder held before the design gates" 2 "$B" '{"tool_name":"spawn_agent","tool_input":{"role":"craftman-tdd-engineer"}}'
+expect "codex foreign agent not counted" 0 "$B" '{"tool_name":"spawn_agent","tool_input":{"agent_type":"explorer"}}'
+[ "$(sed -n 's/^agent_calls: //p' "$MC/state.md")" = 3 ] && ok "foreign agent left the count alone" || bad "foreign agent left the count alone"
+printf '%s' '{"tool_name":"request_user_input","tool_input":{"questions":[{"id":"q1","header":"Push","question":"[APPROVAL:git-push] Push the branch and open a PR?","options":[{"label":"Approve"},{"label":"Reject"}]}]},"tool_response":{"answers":{"q1":{"answers":["Approve"]}}}}' | $R
+grep -q '^granted: git-push' "$MC/approvals.md" && grep -q 'open a PR' "$MC/answers.md" && ok "request_user_input answer recorded by id" || bad "request_user_input answer recorded by id"
+printf '%s' '{"tool_name":"request_user_input","tool_input":{"questions":[{"id":"q2","question":"[APPROVAL:tracker] Create the issues?"}]},"tool_response":"{\"answers\":{\"q2\":\"Reject\"}}"}' | $R
+grep -q '^granted: tracker' "$MC/approvals.md" && bad "a rejected id answer grants nothing" || ok "a rejected id answer grants nothing"
+craftman-state ask "[APPROVAL:deploy] Deploy to staging now?" "Approve|Reject" >/dev/null; [ -f "$MC/pending.md" ] && ok "ask records the pending question" || bad "ask records the pending question"
+printf '{"hook_event_name":"UserPromptSubmit","prompt":"what does this step do?","cwd":"%s"}' "$P" | $R
+[ -f "$MC/pending.md" ] && ! grep -q '^granted: deploy' "$MC/approvals.md" && ok "an unrelated message leaves the question pending" || bad "an unrelated message leaves the question pending"
+printf '{"hook_event_name":"UserPromptSubmit","prompt":"approve","cwd":"%s"}' "$P" | $R
+grep -q '^granted: deploy' "$MC/approvals.md" && [ ! -f "$MC/pending.md" ] && ok "the next message that names an option is the answer" || bad "the next message that names an option is the answer"
+HT="$(mktemp -d)"; printf '{"hook_event_name":"SessionStart","cwd":"%s"}' "$P" | PLUGIN_ROOT=/opt/plugins/ai-craftman HOME="$HT" bash "$HERE/scripts/codex-session.sh"
+[ "$(cat "$P/.craftman/.plugin-root")" = /opt/plugins/ai-craftman ] && [ "$(cat "$HT/.codex/ai-craftman.root")" = /opt/plugins/ai-craftman ] && ok "session hook records the plugin root" || bad "session hook records the plugin root"; rm -rf "$HT"
+grep -qx '.agents-active' "$P/.craftman/.gitignore" && grep -qx '.plugin-root' "$P/.craftman/.gitignore" && ok "codex control files git-ignored" || bad "codex control files git-ignored"
+craftman-state resume r1 >/dev/null
+python3 "$HERE/scripts/build-codex.py" --check >/dev/null && ok "codex bundle up to date" || bad "codex bundle up to date (run scripts/build-codex.py)"
+python3 -c 'import json; json.load(open("'"$HERE"'/codex/plugin.json")); json.load(open("'"$HERE"'/codex/hooks/hooks.json")); json.load(open("'"$HERE"'/.agents/plugins/marketplace.json"))' && ok "codex manifests are json" || bad "codex manifests are json"
+if python3 -c 'import tomllib' 2>/dev/null; then
+  python3 -c 'import tomllib,glob,sys; [tomllib.loads(open(f).read()) for f in glob.glob(sys.argv[1]+"/codex/agents/*.toml")]' "$HERE" && ok "codex agents parse as toml" || bad "codex agents parse as toml"
+fi
+[ "$(ls "$HERE"/codex/agents/*.toml | wc -l | tr -d ' ')" = "$(ls "$HERE"/agents/*.md | wc -l | tr -d ' ')" ] && ok "one codex agent per claude agent" || bad "one codex agent per claude agent"
+grep -rq "ai-craftman:" "$HERE"/codex/skills/craftman/SKILL.md "$HERE"/codex/agents/ && bad "claude agent names left in the codex bundle" || ok "no claude agent names in the codex bundle"
+grep -q '"PLUGIN_ROOT"\|\${PLUGIN_ROOT}' "$HERE/codex/hooks/hooks.json" && ok "codex hooks resolve through PLUGIN_ROOT" || bad "codex hooks resolve through PLUGIN_ROOT"
+
 # every agent carries the shared output contract (except memory-keeper)
 for a in "$HERE"/agents/*.md; do
   [ "$(basename "$a")" = memory-keeper.md ] && continue
